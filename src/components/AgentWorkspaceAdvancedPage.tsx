@@ -44,6 +44,7 @@ import {
   CreateNew,
   useOutboundAddButton,
   InteractionNavItem,
+  ListItem,
   Icon,
   Badge,
   Separator,
@@ -128,6 +129,7 @@ import {
   OUTBOUND_TEAM_MEMBERS,
   OUTBOUND_CONFIG,
   OUTBOUND_AGENTS,
+  OUTBOUND_SKILLS,
   CONTACT_HISTORY_OUTBOUND_CONTACTS,
   buildContactHistoryOutboundContacts,
 } from "@/components/agent-next-gen-outbound-data";
@@ -211,6 +213,7 @@ import {
 import { CollapsedChannelBadge } from "@/components/CollapsedChannelBadge";
 import { AddChannelAdHocButton } from "@/components/agent-next-gen-add-channel-button";
 import { VoiceCallControls } from "@/components/agent-next-gen-voice-call-controls";
+import { MergedCallNavCard } from "@/components/agent-next-gen-merged-call-nav-card";
 // Per explicit request ("if I push the L button on the keyboard it
 // launches Marcus Webb's contact [in Premium] - do this for both Phase 1
 // and 1B"): only this scenario's fixed identity is needed here — see the
@@ -224,6 +227,13 @@ import { VoiceCallControls } from "@/components/agent-next-gen-voice-call-contro
 // still chat-only, unchanged, since Premium's own "L" trigger and its
 // whole scripted Copilot walkthrough still depend on it being a chat.
 import { MARCUS_WEBB_ID, MARCUS_WEBB_CUSTOMER_ID, MARCUS_WEBB_CUSTOMER_NAME } from "@/components/agent-next-gen-marcus-webb-scenario";
+import {
+  TRANSFER_HANDOFF_ID,
+  TRANSFER_HANDOFF_SUMMARY,
+  TRANSFER_HANDOFF_PRIOR_AGENTS,
+  buildTransferHandoffInteraction,
+} from "@/components/agent-next-gen-transfer-handoff-scenario";
+import { TransferHistoryCard } from "@/components/agent-next-gen-transfer-history-card";
 import {
   MarcusWebbNextBestActionCard,
   MarcusWebbActionDetailPanelBody,
@@ -285,6 +295,8 @@ import {
   RotateCcw,
   User,
   Headphones,
+  Headset,
+  Layers,
   ChevronRight,
   CircleAlert,
   Inbox,
@@ -1853,18 +1865,42 @@ export function AgentWorkspaceAdvancedPage({
   // handling.
   const liveVoiceCallInteraction = interactions.find((i) => !!findLiveVoiceThread(i)) ?? null;
   const liveVoiceCallThread = liveVoiceCallInteraction ? findLiveVoiceThread(liveVoiceCallInteraction) : undefined;
+  // Per explicit follow-up request ("switch the voice controls at the
+  // bottom of screen to match whichever voice interaction is selected"):
+  // `liveVoiceCallInteraction` above only ever resolves the FIRST live
+  // voice thread it finds scanning `interactions` in array order — fine
+  // while this app really could only ever have one live call at a time,
+  // but agent-to-agent voice calls can now coexist with a customer voice
+  // call, so that scan could keep resolving to a DIFFERENT call than the
+  // one the agent just clicked over to in the left nav. This re-checks
+  // the CURRENTLY ACTIVE interaction specifically for its own live voice
+  // thread, and prefers that when it has one — falling back to the old
+  // "any live call" value otherwise, so a live call the agent has merely
+  // navigated away from (to look at email, Settings, etc.) still doesn't
+  // just vanish from this bar; only switching TO another interaction that
+  // itself has a live voice call actually takes it over, the same way
+  // call waiting normally works.
+  const activeInteractionLiveVoiceThread = activeInteraction ? findLiveVoiceThread(activeInteraction) : undefined;
+  const displayedVoiceCallInteraction =
+    activeInteraction && activeInteractionLiveVoiceThread ? activeInteraction : liveVoiceCallInteraction;
+  const displayedVoiceCallThread =
+    activeInteraction && activeInteractionLiveVoiceThread ? activeInteractionLiveVoiceThread : liveVoiceCallThread;
   // Whether the call-controls bar below is showing for whichever
   // interaction is ALSO the one currently on screen — `onToggleTranscript`/
   // `onToggleVideo` below only make sense against that one interaction's
   // own `sidePanelOpen`/video-window state, both of which are page-level UI
   // tied to whatever `activeInteractionId` currently is, not to
-  // `liveVoiceCallInteraction` itself. Neither button is wired at all
+  // `displayedVoiceCallInteraction` itself. Neither button is wired at all
   // (`undefined` — hides them, same pattern every other optional callback
   // on this shared component already follows) once the agent has navigated
   // away from that interaction, rather than silently doing nothing or
-  // acting on the wrong interaction's panel.
+  // acting on the wrong interaction's panel. Compares against
+  // `displayedVoiceCallInteraction` (not the old `liveVoiceCallInteraction`)
+  // so this still means exactly what its name says once the two can
+  // disagree (a backgrounded call being shown while looking at something
+  // else entirely).
   const isViewingLiveVoiceCallInteraction =
-    !!liveVoiceCallInteraction && liveVoiceCallInteraction.id === activeInteractionId;
+    !!displayedVoiceCallInteraction && displayedVoiceCallInteraction.id === activeInteractionId;
   // Per explicit request/follow-up clarification: true for a brand-new
   // AGENT-INITIATED OUTBOUND active channel — the active Thread's OWN
   // `startedFresh` (see that field's own doc comment on why this reads
@@ -1930,7 +1966,16 @@ export function AgentWorkspaceAdvancedPage({
   const activeInteractionIsRealCustomer = activeInteraction
     ? CREATE_NEW_CUSTOMERS.some((c) => c.id === activeInteraction.id) ||
       createdCustomerRecords.some((c) => c.id === activeInteraction.id) ||
-      activeInteraction.id.startsWith("history:")
+      activeInteraction.id.startsWith("history:") ||
+      // Agent-to-Agent Transfer Handoff demo scenario — same "not a real
+      // CREATE_NEW_CUSTOMERS record, but still needs the Customer Context
+      // Overview accordion to actually render" carve-out this gate already
+      // makes for a reopened Contact History row above; without it the
+      // record header's main `<InteractionTranscript>` call site (the one
+      // that wraps its whole `customerContextOverview` prop in this same
+      // flag) would pass `undefined` and the Transfer History card would
+      // never show up at all.
+      activeInteraction.id === TRANSFER_HANDOFF_ID
     : true;
   // Feeds the Customer Context Overview accordion (`customerContextOverview`
   // prop, below) that now renders in place of the old plain `ContactOverview`
@@ -1979,6 +2024,18 @@ export function AgentWorkspaceAdvancedPage({
         ],
         nextBestAction:
           "Review the order and approve the $200 refund so the AI agent can complete the request and take the customer off hold.",
+      };
+    }
+    // Agent-to-Agent Transfer Handoff demo scenario — same injection point
+    // as the Marcus Webb branch just above, just adding
+    // `transferHistoryContent` instead of overriding snapshot/nextBestAction
+    // (every other field on `base` is left as-is).
+    if (activeInteraction.id === TRANSFER_HANDOFF_ID) {
+      return {
+        ...base,
+        transferHistoryContent: (
+          <TransferHistoryCard summary={TRANSFER_HANDOFF_SUMMARY} priorAgents={TRANSFER_HANDOFF_PRIOR_AGENTS} />
+        ),
       };
     }
     return base;
@@ -2355,21 +2412,6 @@ export function AgentWorkspaceAdvancedPage({
      already renders. */
   const [selectedAllContactsRecord, setSelectedAllContactsRecord] = useState<InteractionHistoryRecord | null>(null);
 
-  // Per explicit follow-up request ("below the dashboard / all contacts
-  // page header at tabs for Contacts (Active), Messages and Threads") — a
-  // "(Active)" was dropped from the tab label per a follow-up ("Remove
-  // (Active) from the contacts tab") — the tab is just "Contacts" now.
-  // `TabList` row inside the All Contacts view itself, below its
-  // `PageHeader`, same `TabList`/`Tab`/`activeTab`-string pattern already
-  // used elsewhere in this app (e.g. the Customer Information panel's own
-  // `CUSTOMER_PANEL_TABS`). Only "Contacts" has real content (the
-  // existing `InteractionsListView` table + its own `InteriorPanel`,
-  // below) — "Messages" and "Threads" are placeholders for now (same empty
-  // `<div className="flex-1 overflow-y-auto" />` the Settings view already
-  // uses as its own placeholder body), pending a real data model for
-  // per-message/per-thread rows.
-  const ALL_CONTACTS_TABS = ["Contacts", "Messages", "Threads"] as const;
-  const [allContactsTab, setAllContactsTab] = useState<(typeof ALL_CONTACTS_TABS)[number]>("Contacts");
 
   // Effect rather than touching every `setActiveInteractionId` call site
   // individually. Only closes Settings — does NOT touch `showAllContacts`/
@@ -2580,6 +2622,27 @@ export function AgentWorkspaceAdvancedPage({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [agentStatus, marcusWebbTriggered]);
+  // Agent-to-Agent Transfer Handoff demo scenario
+  // (agent-next-gen-transfer-handoff-scenario.ts) — "T" launches a
+  // pre-seeded voice interaction that arrives already warm-transferred
+  // through 2-3 prior agents. Deliberately much simpler than Marcus Webb's
+  // own "L" trigger just above (no toast notice/reviewing-mode machinery) —
+  // the tile just appears in the left nav, same as this page's own
+  // confirmed scope decision to keep this proportionate.
+  const [transferHandoffTriggered, setTransferHandoffTriggered] = useState(false);
+  useEffect(() => {
+    if ((agentStatus !== "available" && agentStatus !== "working") || transferHandoffTriggered) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== "t" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable) return;
+      const interaction = buildTransferHandoffInteraction(clockTickRef.current);
+      setInteractions((prev) => (prev.some((i) => i.id === TRANSFER_HANDOFF_ID) ? prev : [...prev, interaction]));
+      setTransferHandoffTriggered(true);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [agentStatus, transferHandoffTriggered]);
   const [showWelcomeModal, setShowWelcomeModal] = useState(true);
   // Flushes whatever `fireAgentLegStatusToast` deferred (further up this
   // component) the moment the welcome modal actually closes (Go Available /
@@ -2671,6 +2734,44 @@ export function AgentWorkspaceAdvancedPage({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeInteractionId]);
+  // Lifted out of `VoiceCallControls` (optionally controlled there — see
+  // `VoiceCallControlsProps.onConferenceOpenChange`'s own doc comment) per
+  // explicit follow-up request: the record header's own "Consult /
+  // Transfer" icon button (agent-next-gen-transcript.tsx,
+  // `onSessionConsultTransferClick` below) needs to open the exact same
+  // Consult popover the call-controls bar's own "Consult" button does, and
+  // the two live in completely different parts of the component tree — a
+  // plain local `useState` inside the bar alone can't be reached from the
+  // record header, so this one boolean is shared at the page level instead.
+  const [conferenceOpen, setConferenceOpen] = useState(false);
+  // Where the Consult popover anchors — see the identical declaration's own
+  // doc comment in AgentWorkspace2WithDeskPage.tsx (this page's independent
+  // copy of the same feature).
+  const consultAnchorRef = useRef<HTMLElement | null>(null);
+  const handleConferenceOpenChange = (next: boolean) => {
+    setConferenceOpen(next);
+    if (!next) consultAnchorRef.current = null;
+  };
+  // "Merge Calls" candidate picker — opened from the voice channel's own
+  // kebab (left-nav row or record-header `ChannelToggle`), always on a
+  // SPECIFIC interaction (`sourceId`), not necessarily whichever is
+  // currently active. See `Interaction.mergedInteractionIds`'s own doc
+  // comment (agent-next-gen-interaction-dashboard.tsx) for the feature.
+  const [mergeCallsPicker, setMergeCallsPicker] = useState<{ sourceId: string } | null>(null);
+  // Which candidate is currently picked in that popover's list — reset to
+  // none every time a fresh picker opens (see `openMergeCallsPicker`).
+  const [mergeCallsSelectedId, setMergeCallsSelectedId] = useState<string | null>(null);
+  // Where the Merge Calls picker popover anchors — see the identical
+  // declaration's own doc comment in AgentWorkspace2WithDeskPage.tsx (this
+  // page's independent copy of the same feature).
+  const mergeCallsAnchorRef = useRef<HTMLElement | null>(null);
+  const interactionCardRefs = useRef(new Map<string, HTMLElement>()).current;
+  const recordHeaderMergeAnchorRef = useRef<HTMLDivElement | null>(null);
+  const openMergeCallsPicker = (sourceId: string, anchorEl: HTMLElement | null) => {
+    mergeCallsAnchorRef.current = anchorEl;
+    setMergeCallsPicker({ sourceId });
+    setMergeCallsSelectedId(null);
+  };
   // Floating video window — see AgentNextGenPage.tsx's identical state for
   // the full rationale.
   const [voiceVideoWindowOpen, setVoiceVideoWindowOpen] = useState(false);
@@ -3489,6 +3590,72 @@ export function AgentWorkspaceAdvancedPage({
         setSidePanelFullScreen(false);
       }
     }
+  };
+
+  // "Merge Calls" — bridges two fully independent, already-live voice
+  // Interactions into one combined call. See `Interaction.
+  // mergedInteractionIds`'s own doc comment (agent-next-gen-interaction-
+  // dashboard.tsx) for the data model, and `mergeCallsPicker` above for the
+  // candidate-selection state this group of handlers reads/clears.
+  const getMergeGroupIds = (interaction: Interaction): string[] => [
+    interaction.id,
+    ...(interaction.mergedInteractionIds ?? []),
+  ];
+
+  // Per explicit request ("identify the list as either a customer icon or
+  // agent icon or skill icon") — see the identical helper's own doc comment
+  // in AgentWorkspace2WithDeskPage.tsx for the full reasoning.
+  const getMergeCandidateKind = (candidate: Interaction): "agent" | "skill" | "customer" => {
+    if (OUTBOUND_AGENTS.some((a: CreateNewOutboundContact) => a.id === candidate.id)) return "agent";
+    if (OUTBOUND_SKILLS.some((s: CreateNewOutboundContact) => s.id === candidate.id)) return "skill";
+    return "customer";
+  };
+  const getMergeCandidateIcon = (candidate: Interaction) => {
+    const kind = getMergeCandidateKind(candidate);
+    return kind === "agent" ? Headset : kind === "skill" ? Layers : User;
+  };
+  // Per explicit request ("if merging an agent or skill into a customer
+  // call, treat the assignment card like a conference") — see the
+  // identical helper's own doc comment in AgentWorkspace2WithDeskPage.tsx.
+  const getConferenceStyleCustomerMember = (groupInteractions: Interaction[]): Interaction | undefined => {
+    const customers = groupInteractions.filter((i) => getMergeCandidateKind(i) === "customer");
+    return customers.length === 1 && customers.length < groupInteractions.length ? customers[0] : undefined;
+  };
+
+  // Tracks which interactions the LeftNav's render loop (below) has already
+  // folded into a combined `MergedCallNavCard` — see that render loop's own
+  // doc comment for the full explanation.
+  const renderedMergeGroupIds = new Set<string>();
+
+  const handleMergeCalls = (sourceId: string, targetId: string) => {
+    setInteractions((prev) =>
+      prev.map((i) =>
+        i.id === sourceId
+          ? { ...i, mergedInteractionIds: [...(i.mergedInteractionIds ?? []), targetId] }
+          : i.id === targetId
+            ? { ...i, mergedInteractionIds: [...(i.mergedInteractionIds ?? []), sourceId] }
+            : i
+      )
+    );
+    setMergeCallsPicker(null);
+  };
+
+  const handleUnmergeCalls = (interactionId: string) => {
+    const target = interactions.find((i) => i.id === interactionId);
+    if (!target) return;
+    const groupIds = getMergeGroupIds(target);
+    setInteractions((prev) => prev.map((i) => (groupIds.includes(i.id) ? { ...i, mergedInteractionIds: undefined } : i)));
+  };
+
+  const handleEndAllCalls = (interactionId: string) => {
+    const target = interactions.find((i) => i.id === interactionId);
+    if (!target) return;
+    const groupIds = getMergeGroupIds(target);
+    setInteractions((prev) =>
+      prev.map((i) => (groupIds.includes(i.id) ? { ...i, voiceCallEnded: true, mergedInteractionIds: undefined } : i))
+    );
+    setVoiceVideoWindowOpen(false);
+    setVoiceVideoFullScreen(false);
   };
 
   // Toggles the Customer Information/"Session Details" panel — this
@@ -6721,27 +6888,34 @@ export function AgentWorkspaceAdvancedPage({
       <div ref={bodyContainerRef} className="flex flex-1 min-h-0 overflow-hidden">
 
         <LeftNav
-          // Home and Settings — per explicit request ("move the home button
-          // above the settings like in phase 1 left nav (match to phase
-          // 1)"): mirrors `AgentNextGenPage.tsx`'s own latest arrangement
-          // exactly (see that file's identical comment on this same prop
-          // for the fuller history) — `items` no longer holds Home at all;
-          // `footer` holds BOTH Home and Settings together, Home first (see
-          // `footer`'s own doc comment further down). Used to be one
-          // `buildNavItems(...)` array split across `items`/`footer`
-          // (`homeNavItem` here, `settingsNavItem` there) — that was itself
-          // mirroring an EARLIER shape of 2.0's own left nav, since
-          // superseded there by this "both together in footer" arrangement.
+          // Dashboard + Settings — per an earlier explicit follow-up
+          // request ("move the Dashboard left rail nav to the top of the
+          // left rail just under the new outbound button"), Dashboard used
+          // to live in this `items` slot (left-nav.tsx renders it directly
+          // under `pinnedHeader`'s "New Outbound", above the sticky
+          // "Assignments" caption `itemsFirst` creates below). Per a LATER
+          // explicit request ("move the dashboard left rail nav above the
+          // new outbound button"), Dashboard now renders ABOVE "New
+          // Outbound" instead — both now live stacked inside `pinnedHeader`
+          // itself (see that prop's own doc comment further down,
+          // including the same "Dashboard no longer resets `showAllContacts`
+          // /`selectedAllContactsRecord`" follow-up this call's own
+          // arguments still carry), so this slot is empty; `items`/
+          // `itemsFirst` stay wired for their other structural effects (the
+          // sticky-top box `stickyCaption` joins, `headerFillsHeight`'s
+          // empty-state centering below) rather than removing the prop
+          // outright. Settings stays alone in `footer` (still genuinely
+          // pinned to the rail's true bottom edge) — see that slot's own
+          // doc comment further down.
           items={[]}
           open={navOpen}
           onToggle={() => setNavOpen((v) => !v)}
           overlay={isNavNarrow}
-          // `itemsFirst` stays truthy solely to keep `stickyCaption` (below)
-          // rendering at all — left-nav.tsx's own doc comment: "only
-          // meaningful combined with itemsFirst, ... ignored when
-          // itemsFirst is falsy" — even though `items` itself is now empty
-          // (Home having moved to `footer`, below). The sticky-top box
-          // `itemsFirst` creates now holds only the "Assignments" caption.
+          // `itemsFirst` is what makes `stickyCaption` (below) render at
+          // all — left-nav.tsx's own doc comment: "only meaningful combined
+          // with itemsFirst, ... ignored when itemsFirst is falsy". The
+          // sticky-top box it creates now holds Dashboard (`items`, just
+          // above) followed by the "Assignments" caption (`stickyCaption`).
           itemsFirst
           // Lets `header` (the caption/cards region) grow to fill
           // whatever height Home+"New Outbound" don't use, so the
@@ -6755,9 +6929,8 @@ export function AgentWorkspaceAdvancedPage({
           // ("fix the assignments header under the home button so it
           // doesn't scroll"), mirrored from 2.0 (`AgentNextGenPage.tsx` —
           // see that file's own comment on this same prop for the fuller
-          // writeup): rendered via `stickyCaption` now, the same sticky-top
-          // box as `items` (Home), so it stays pinned with Home instead of
-          // scrolling away with the cards under it.
+          // writeup): rendered via `stickyCaption`, the sticky-top box
+          // `itemsFirst` creates, right below Dashboard (`items`, above).
           stickyCaption={
             <AssignmentsSectionCaption
               expanded={navOpen}
@@ -6776,19 +6949,15 @@ export function AgentWorkspaceAdvancedPage({
               compact
             />
           }
-          // Home + Settings — per explicit request ("move the home button
-          // above the settings like in phase 1 left nav (match to phase
-          // 1)"), both render together in `footer`, Home first, genuinely
-          // pinned to the TRUE bottom of the nav (not just `sticky
-          // bottom-0`, which only holds once the card list actually
-          // overflows; a short list used to leave a Home-less Settings
-          // sitting right after the cards with empty space below). `footer`
-          // renders as a sibling AFTER the whole scrollable region entirely
-          // — always at the aside's real bottom edge regardless of how much
-          // content is above it. `NavRail` (exported from left-nav.tsx)
-          // renders both `NavItem`s with the exact same TreeMenu/icon-only
-          // styling `items` itself uses — mirrors `AgentNextGenPage.tsx`'s
-          // own identical `footer` exactly.
+          // Settings only now — Dashboard moved up to `items` (see that
+          // prop's own doc comment above for the full "why"). Still
+          // genuinely pinned to the TRUE bottom of the nav (not just
+          // `sticky bottom-0`, which only holds once the card list actually
+          // overflows) — `footer` renders as a sibling AFTER the whole
+          // scrollable region entirely, always at the aside's real bottom
+          // edge regardless of how much content is above it. `NavRail`
+          // (exported from left-nav.tsx) renders its `NavItem`s with the
+          // exact same TreeMenu/icon-only styling `items` itself uses.
           footer={
             // `expanded={navOpen}` passed explicitly, NOT left to
             // `injectExpanded` — `left-nav.tsx`'s INLINE (non-overlay)
@@ -6801,28 +6970,16 @@ export function AgentWorkspaceAdvancedPage({
             // (in `header`) already take `expanded={navOpen}` explicitly.
             <NavRail
               expanded={navOpen}
-              // Passed straight through as the full `buildNavItems(...)`
-              // pair (Home first, then Settings) rather than destructuring
-              // just one element out of it, now that both live here
-              // together — same shape `AgentNextGenPage.tsx`'s own `footer`
-              // already passes.
+              // Same `buildNavItems(...)` call as `items` above, slicing
+              // out the other half of the pair (Settings only) — see that
+              // prop's own doc comment for why this is computed twice
+              // rather than shared through one variable.
               items={buildNavItems(
                 Boolean(activeInteraction),
-                // Per explicit follow-up request, Home no longer resets
-                // `showAllContacts`/`selectedAllContactsRecord` — see that
-                // state's own doc comment for why "Home" now always resumes
-                // whatever was showing there before the agent navigated
-                // away (plain dashboard or All Contacts), instead of
-                // forcing back to the plain dashboard every time.
                 () => { switchActiveInteraction(null); setShowSettings(false); },
                 showSettings,
-                // Same follow-up — opening Settings no longer discards All
-                // Contacts' own state either; it just takes visual priority
-                // while showing (this ternary branch is checked first), and
-                // All Contacts reappears exactly as left once Settings
-                // closes.
                 () => { setShowSettings(true); switchActiveInteraction(null); }
-              )}
+              ).slice(1)}
             />
           }
           // "New Outbound" itself has moved several times now: started as
@@ -6831,61 +6988,114 @@ export function AgentWorkspaceAdvancedPage({
           // slot (left-nav.tsx) pinning it to the STICKY BOTTOM rail
           // alongside Home/Settings (reverted — reported "problematic");
           // moved again to a plain child of `header`, scrolling directly
-          // below the caption (reverted per THIS request — "move new
-          // outbound back above assignments header"). Landed back here,
-          // exactly where it started. `beforeItems` (added to left-nav.tsx
-          // for the middle arrangement) was already removed entirely once
-          // nothing used it — not re-added for this reversion since
-          // `pinnedHeader` covers this exact spot on its own.
+          // below the caption (reverted — "move new outbound back above
+          // assignments header"). Landed back here, exactly where it
+          // started. `beforeItems` (added to left-nav.tsx for the middle
+          // arrangement) was already removed entirely once nothing used it
+          // — not re-added for that reversion since `pinnedHeader` covers
+          // this exact spot on its own.
+          //
+          // Per a later explicit request ("move the dashboard left rail
+          // nav above the new outbound button. keep a little padding to be
+          // sure they are seen separately"), Dashboard briefly rendered
+          // ABOVE "New Outbound" here, both stacked in one `flex flex-col`.
+          // Per the immediate next explicit follow-up ("swap the dashboard
+          // nav and the new outbound button back to where they were a
+          // couple of prompts ago. New outbound on top"), that's reverted:
+          // `CreateNew` ("New Outbound") is first again, Dashboard
+          // (`NavRail`, the first half of the shared `buildNavItems(...)`
+          // pair — Settings, the second half, is unaffected, still alone in
+          // `footer` below) comes second — `items` (above) stays
+          // deliberately empty either way, since Dashboard lives in this
+          // `pinnedHeader` slot now regardless of which order it's in.
+          // `mb-2` (now on the wrapping div around `CreateNew`, the top
+          // element, rather than a `className` prop on `CreateNew` itself
+          // — `CreateNewProps` doesn't actually forward a passed
+          // `className` onto its own trigger/wrapper anywhere internally,
+          // checked before relying on it) is still the "little padding"
+          // asked for in that earlier request — enough gap that the two
+          // read as distinct controls stacked in one box, not one fused
+          // control.
           pinnedHeader={
-            <CreateNew
-              title="New Outbound"
-              outbound={{
-                ...outboundConfig,
-                // `outboundConfig` itself keeps every group, "customers"
-                // included (see `HIDDEN_OUTBOUND_GROUP_IDS`'s own doc
-                // comment, agent-next-gen-outbound-data.tsx, for why:
-                // this app's `useOutboundAddButton` call further down
-                // needs the full group set to resolve a known customer's
-                // own "+" button) — this picker's own browsable "Choose
-                // group" list is narrowed independently, without touching
-                // `outboundConfig` itself, so that lookup keeps working.
-                // Originally just excluded "customers" here (via
-                // `HIDDEN_OUTBOUND_GROUP_IDS`, "keep dial pad but not
-                // customers"). Per a later explicit request ("match the
-                // outbound options to [Agent Workspace 2.0 | Phase 1] but
-                // remove the recents — just have dialpad"), this now
-                // keeps ONLY the "dialpad" group — same one-group filter
-                // AgentNextGenPage.tsx's own `outboundConfig` memo uses
-                // for Phase 1 (see that file's own doc comment), just
-                // applied here at the render site instead of inside the
-                // memo (Phase 1 has no "customers" group to protect in
-                // its own `outboundConfig`, so it can filter there
-                // directly; this page still needs `outboundConfig`
-                // itself untouched for the reason above). Unlike Phase
-                // 1, no "recents" group is added back in — per this
-                // explicit request, Dial Pad is the only option.
-                groups: outboundConfig.groups.filter((group) => group.id === "dialpad"),
-                // "all" (`OUTBOUND_CONFIG.defaultGroupId`, spread in via
-                // `outboundConfig` above) is no longer a valid group id
-                // once every other group is filtered out above — this
-                // picker needs its own default now, same reasoning as
-                // Phase 1's own `outboundConfig.defaultGroupId` override.
-                defaultGroupId: "dialpad",
-                onStartCall: handleStartCall,
-                // Per explicit follow-up request ("add the number / skill
-                // selection popover to the click of a redial to phase 1B -
-                // same functionality as in Phase 1") — see `dialpadRequest`'s
-                // own doc comment above for why this is `handleDialpadSubmit`
-                // (which tells a completed redial apart from an ordinary
-                // dial) rather than `handleQuickDial` directly. Mirrors
-                // AgentNextGenPage.tsx's own identical wiring.
-                onQuickDial: handleDialpadSubmit,
-                dialpadRequest,
-                onDialpadRequestHandled: () => setDialpadRequest(null),
-              }}
-              expanded={navOpen}
-            />
+            // `w-full` here is load-bearing, not decorative — per explicit
+            // follow-up bug report ("the new outbound button and dashboard
+            // to span across the left rail like Settings does"): left-
+            // nav.tsx's own wrapper around `pinnedHeader` is a COLUMN flex
+            // with `items-center` (`flex flex-col items-center px-2 ...`),
+            // unlike `footer`'s own wrapper (a ROW flex, `flex items-center
+            // justify-center`, where the single child's own `w-full` simply
+            // resolves against the full 240px content width). In a column
+            // flex, `items-center` governs the CROSS axis — horizontal —
+            // so a child with no explicit width of its own shrink-wraps to
+            // its own content and centers, instead of stretching. This div
+            // had no width class at all, so it shrank to whatever its
+            // widest child (the "New Outbound" button's own text) needed,
+            // and `CreateNew`/`NavRail`'s own internal `w-full` then
+            // resolved against THAT shrunk box, not the rail's real 240px
+            // — confirmed live (both measured 156px wide, exactly matching
+            // "New Outbound"'s own natural width, vs. Settings' real 240px).
+            // `w-full` forces this wrapper itself to the full available
+            // width, so each child's own `w-full` finally resolves against
+            // the right number.
+            <div className="flex w-full flex-col">
+              <div className="mb-2">
+              <CreateNew
+                title="New Outbound"
+                outbound={{
+                  ...outboundConfig,
+                  // `outboundConfig` itself keeps every group, "customers"
+                  // included (see `hiddenFromGroupList`'s own doc comment,
+                  // agent-next-gen-outbound-data.tsx, for why: this app's
+                  // `useOutboundAddButton` call further down needs the full
+                  // group set to resolve a known customer's own "+" button)
+                  // — this picker's own browsable "Choose group" list is
+                  // narrowed independently, without touching `outboundConfig`
+                  // itself, so that lookup keeps working. Originally just
+                  // excluded "customers" here. Per a later explicit request
+                  // ("match the outbound options to [Agent Workspace 2.0 |
+                  // Phase 1] but remove the recents — just have dialpad"),
+                  // this now keeps ONLY the "dialpad" group — same one-group
+                  // filter AgentNextGenPage.tsx's own `outboundConfig` memo
+                  // uses for Phase 1 (see that file's own doc comment), just
+                  // applied here at the render site instead of inside the
+                  // memo (Phase 1 has no "customers" group to protect in its
+                  // own `outboundConfig`, so it can filter there directly;
+                  // this page still needs `outboundConfig` itself untouched
+                  // for the reason above). Unlike Phase 1, no "recents" group
+                  // is added back in — per this explicit request, Dial Pad
+                  // is the only option.
+                  groups: outboundConfig.groups.filter((group) => group.id === "dialpad"),
+                  // "all" (`OUTBOUND_CONFIG.defaultGroupId`, spread in via
+                  // `outboundConfig` above) is no longer a valid group id
+                  // once every other group is filtered out above — this
+                  // picker needs its own default now, same reasoning as
+                  // Phase 1's own `outboundConfig.defaultGroupId` override.
+                  defaultGroupId: "dialpad",
+                  onStartCall: handleStartCall,
+                  // Per explicit follow-up request ("add the number / skill
+                  // selection popover to the click of a redial to phase 1B -
+                  // same functionality as in Phase 1") — see `dialpadRequest`'s
+                  // own doc comment above for why this is `handleDialpadSubmit`
+                  // (which tells a completed redial apart from an ordinary
+                  // dial) rather than `handleQuickDial` directly. Mirrors
+                  // AgentNextGenPage.tsx's own identical wiring.
+                  onQuickDial: handleDialpadSubmit,
+                  dialpadRequest,
+                  onDialpadRequestHandled: () => setDialpadRequest(null),
+                }}
+                expanded={navOpen}
+              />
+              </div>
+              <NavRail
+                expanded={navOpen}
+                items={buildNavItems(
+                  Boolean(activeInteraction),
+                  () => { switchActiveInteraction(null); setShowSettings(false); },
+                  showSettings,
+                  () => { setShowSettings(true); switchActiveInteraction(null); }
+                ).slice(0, 1)}
+              />
+            </div>
           }
           header={
             <>
@@ -6952,6 +7162,38 @@ export function AgentWorkspaceAdvancedPage({
                   for everything else that reads it, only this rendering
                   reorders a copy. */}
               {sortAssignments(interactions, assignmentSort, assignmentSortDirection).map((interaction) => {
+                // Merged-calls combined tile — see `renderedMergeGroupIds`'s
+                // own doc comment above. A later member of an already-
+                // rendered group renders nothing of its own here; the
+                // group's first member (sort order) renders the combined
+                // tile instead of its normal `InteractionNavCard`.
+                if (renderedMergeGroupIds.has(interaction.id)) return null;
+                if (interaction.mergedInteractionIds?.length) {
+                  const groupIds = getMergeGroupIds(interaction);
+                  const groupInteractions = groupIds
+                    .map((id) => interactions.find((i) => i.id === id))
+                    .filter((i): i is Interaction => !!i);
+                  // Conference-style (one customer + 1+ agent/skill members)
+                  // — see `getConferenceStyleCustomerMember`'s own doc
+                  // comment.
+                  const conferenceCustomerMember = getConferenceStyleCustomerMember(groupInteractions);
+                  if (conferenceCustomerMember) {
+                    if (interaction.id !== conferenceCustomerMember.id) return null;
+                  } else {
+                    groupIds.forEach((id) => renderedMergeGroupIds.add(id));
+                    const members = groupInteractions.map((i) => ({ id: i.id, name: i.customerName ?? "Unknown" }));
+                    return (
+                      <MergedCallNavCard
+                        key={interaction.id}
+                        members={members}
+                        activeInteractionId={activeInteractionId}
+                        onSelectMember={switchActiveInteraction}
+                        onUnmerge={() => handleUnmergeCalls(interaction.id)}
+                        onEndAllCalls={() => handleEndAllCalls(interaction.id)}
+                      />
+                    );
+                  }
+                }
                 const mostRecentId = interaction.threads[interaction.threads.length - 1]?.id;
                 const currentId = interaction.currentThreadId ?? mostRecentId;
                 // Seconds since the CUSTOMER last wrote on this channel —
@@ -7270,6 +7512,21 @@ export function AgentWorkspaceAdvancedPage({
                             }
                           }
                         : undefined,
+                    // "Merge Calls" — bridges this (voice, still live)
+                    // interaction with another, separately live voice
+                    // interaction via the picker (`mergeCallsPicker` state).
+                    // Voice-only, same liveness gate as `onEndCall` just
+                    // above (minus `SHOW_END_CALL_IN_INTERACTION_NAV_ROWS`,
+                    // which only controls that OTHER button's own
+                    // visibility, not this one). See `Interaction.
+                    // mergedInteractionIds`'s own doc comment.
+                    onMergeCalls:
+                      c.type === "voice" &&
+                      !interaction.closed &&
+                      !interaction.voiceCallEnded &&
+                      !(interaction.id === MARCUS_WEBB_ID && marcusWebbReviewing)
+                        ? () => openMergeCallsPicker(interaction.id, interactionCardRefs.get(interaction.id) ?? null)
+                        : undefined,
                     // Forwarded straight from `Thread.direction` — drives
                     // `VoiceDirectionIcon`/`SmsDirectionIcon` at this row's
                     // own channel icon (lyra-ui, channel-row.tsx). Per
@@ -7395,9 +7652,44 @@ export function AgentWorkspaceAdvancedPage({
                 // `navOpen` the way it originally did.
                 const currentChannelType =
                   channels.find((c) => c.id === currentId)?.type ?? channels[channels.length - 1]?.type;
+                // Per explicit follow-up request ("show all participant
+                // names in the assignment card also with a similar
+                // 'conference' icon" / later follow-up "list the
+                // participants in the conference call vertically... keep
+                // the initial person in the same place with the same
+                // weight and size. Others added can be listed smaller"):
+                // once this card's own live voice thread (if any) has real
+                // merged colleagues (`Thread.colleagues`, lifted from
+                // `VoiceCallControls` — see that field's own doc comment),
+                // pass their names through `additionalParticipants` below
+                // instead of folding them into `customerName` itself.
+                const cardLiveVoiceThread = findLiveVoiceThread(interaction);
+                const cardConferenceColleagues = cardLiveVoiceThread?.colleagues ?? [];
+                // Per explicit request ("if merging an agent or skill into
+                // a customer call, treat the assignment card like a
+                // conference") — see the identical derivation's own doc
+                // comment in AgentWorkspace2WithDeskPage.tsx.
+                const cardMergedAgentSkillNames = (interaction.mergedInteractionIds ?? [])
+                  .map((id) => interactions.find((i) => i.id === id))
+                  .filter((i): i is Interaction => !!i && getMergeCandidateKind(i) !== "customer")
+                  .map((i) => i.customerName ?? "Unknown");
+                const cardIsConferenceCall = cardConferenceColleagues.length > 0 || cardMergedAgentSkillNames.length > 0;
                 return (
-                  <InteractionNavCard
+                  <div
                     key={interaction.id}
+                    // Plain block wrapper, NOT `display: contents` — see the
+                    // identical wrapper's own doc comment in
+                    // AgentWorkspace2WithDeskPage.tsx for why (a `display:
+                    // contents` box can't be measured by
+                    // `getBoundingClientRect()` at all, which this wrapper
+                    // exists specifically to let the Merge Calls picker
+                    // popover do).
+                    ref={(el) => {
+                      if (el) interactionCardRefs.set(interaction.id, el);
+                      else interactionCardRefs.delete(interaction.id);
+                    }}
+                  >
+                  <InteractionNavCard
                     currentChannelType={currentChannelType}
                     showChannelBadge={channels.length <= 1}
                     // Same `cardAwaitingWaitSeconds`/`getAwaitingSeverity`
@@ -7408,6 +7700,12 @@ export function AgentWorkspaceAdvancedPage({
                     // avatar/border, the elapsed timer, the corner dot).
                     badgeSeverity={cardAwaitingWaitSeconds !== undefined ? getAwaitingSeverity(cardAwaitingWaitSeconds) : undefined}
                     customerName={interaction.customerName}
+                    // Every merged conference colleague's name — see
+                    // `InteractionNavItemProps.additionalParticipants`'s own
+                    // doc comment (interaction-nav-item.tsx) for why these
+                    // are a separate prop rather than folded into
+                    // `customerName` above.
+                    additionalParticipants={[...cardConferenceColleagues.map((c) => c.name), ...cardMergedAgentSkillNames]}
                     // `adhoc:`-prefixed ids are lyra-ui's own "Continue
                     // with" ad-hoc flow (`buildAdHocSearchContact`, create-
                     // new.tsx) — a typed number/email with no matching
@@ -7419,6 +7717,24 @@ export function AgentWorkspaceAdvancedPage({
                     // that address — `customerName` itself is untouched, so
                     // the card's title text still reads as the address.
                     customerIdentified={!interaction.id.startsWith("adhoc:")}
+                    // Per explicit request: an SMS/WhatsApp/voice card whose
+                    // OTHER PARTY is itself an internal agent (not a
+                    // customer) gets a `Headset` glyph leading its expanded
+                    // name row. Same `OUTBOUND_AGENTS.some(a => a.id ===
+                    // ...id)` derivation `activeInteractionIsAgentCall`
+                    // already uses for the record-header icon — a real
+                    // customer id never collides with an agent one, so this
+                    // is a safe per-card check, not something that needs a
+                    // dedicated field on `Interaction` itself. Chat never
+                    // reaches here at all (an agent-to-agent chat routes
+                    // straight to the Agent Chat panel instead), so this
+                    // naturally only ever shows for the channel types the
+                    // request named.
+                    isInternalAgent={OUTBOUND_AGENTS.some((a: CreateNewOutboundContact) => a.id === interaction.id)}
+                    // See `cardIsConferenceCall`'s own doc comment above —
+                    // takes priority over `isInternalAgent` in lyra-ui's own
+                    // rendering (only one leading-icon slot).
+                    isConferenceCall={cardIsConferenceCall}
                     active={activeInteractionId === interaction.id}
                     // Exits fullscreen directly here (not just via the
                     // `activeInteractionId`-keyed effect near
@@ -7506,6 +7822,7 @@ export function AgentWorkspaceAdvancedPage({
                     currentChannelKey={currentId}
                     onCurrentChannelChange={(key) => handleChannelSelect(interaction.id, key)}
                   />
+                  </div>
                 );
               })}
             </>
@@ -7656,27 +7973,16 @@ export function AgentWorkspaceAdvancedPage({
                       }}
                     />
                   )}
-                  {/* Per explicit follow-up request ("below the dashboard /
-                      all contacts page header at tabs for Contacts
-                      (Active), Messages and Threads") — see
-                      `allContactsTab`'s own doc comment above for why only
-                      "Contacts" has real content so far. */}
-                  <TabList className="px-4" overflowMenu>
-                    {ALL_CONTACTS_TABS.map((label) => (
-                      <Tab
-                        key={label}
-                        active={allContactsTab === label}
-                        onClick={() => setAllContactsTab(label)}
-                      >
-                        {label}
-                      </Tab>
-                    ))}
-                  </TabList>
-                  {allContactsTab !== "Contacts" ? (
-                    // Placeholder — see `allContactsTab`'s own doc comment.
-                    <div className="flex-1 overflow-y-auto" />
-                  ) : (
-                  /* Body row: table + this view's OWN right-docked
+                  {/* Per later explicit follow-up request ("remove messages
+                      and threads tabs") — the `TabList`/`Tab` row this view
+                      used to show below the page header (Contacts/Messages/
+                      Threads, only "Contacts" ever having real content) is
+                      gone outright, along with `allContactsTab`'s own state
+                      and the placeholder it used to switch to — this view
+                      only ever had one real destination, so there's nothing
+                      left for a tab switcher to do.
+
+                      Body row: table + this view's OWN right-docked
                       `InteriorPanel` — a second, independent instance from
                       the dashboard's own (further below), since this whole
                       view is now a standalone container with nothing else
@@ -7692,7 +7998,7 @@ export function AgentWorkspaceAdvancedPage({
                       `selectedContactHistoryEntry`'s own doc comment further
                       up, and `buildContactHistoryEntryFromInteractionRecord`,
                       agent-next-gen-interactions-table.tsx, for how a table
-                      row is adapted into that same shape). */
+                      row is adapted into that same shape). */}
                   <div className="relative flex flex-1 min-h-0 overflow-hidden">
                     <InteractionsListView
                       onAddToast={addToast}
@@ -7764,7 +8070,6 @@ export function AgentWorkspaceAdvancedPage({
                       </InteriorPanel>
                     )}
                   </div>
-                  )}
                 </div>
               ) : activeInteraction ? (
                 // ── Active interaction's detail page — replaces the Desk
@@ -8147,6 +8452,10 @@ export function AgentWorkspaceAdvancedPage({
                       actions={
                         <div className="flex items-center gap-1">
                         {activeInteraction.threads.length > 0 && (
+                          // `inline-block`, not `display: contents` — see
+                          // the identical wrapper's own doc comment in
+                          // AgentWorkspace2WithDeskPage.tsx.
+                          <div ref={recordHeaderMergeAnchorRef} style={{ display: "inline-block" }}>
                           <ChannelToggleGroup
                             // The "+" Add Channel trigger — same
                             // `getHeaderAction` (stock picker) ?? `Add
@@ -8219,6 +8528,11 @@ export function AgentWorkspaceAdvancedPage({
                                     if (activeInteraction.threads.length > 1) handleDismissChannel(activeInteraction.id, c);
                                     else handleDismissInteraction(activeInteraction.id);
                                   }}
+                                  onMergeCalls={
+                                    c.type === "voice" && !activeInteraction.closed && !activeInteraction.voiceCallEnded
+                                      ? () => openMergeCallsPicker(activeInteraction.id, recordHeaderMergeAnchorRef.current)
+                                      : undefined
+                                  }
                                   showMenu={
                                     !activeInteraction.closed &&
                                     activeInteraction.threadStatuses?.[c.id] !== "Closed" &&
@@ -8265,6 +8579,7 @@ export function AgentWorkspaceAdvancedPage({
                               </PlainToggleTab>
                             )}
                           </ChannelToggleGroup>
+                          </div>
                         )}
                         {/* "Open Details Panel" — see this `actions` block's
                             own top doc comment for the full history of where
@@ -8789,21 +9104,38 @@ export function AgentWorkspaceAdvancedPage({
                           // header's own now-removed copy is gone (see the
                           // record-header `actions` call site above).
                           showSessionActionCluster
-                          // Per explicit follow-up request ("hide the add
-                          // participant icon button and for all interactions
-                          // move the transfer inside the 3 dots menu - move
-                          // the 3 dots to the left of the outcome button and
-                          // move the status chip to the left of the 3 dots
-                          // button") — three new, Advanced-only props on the
-                          // shared `agent-next-gen-transcript.tsx` component
-                          // (see each one's own doc comment there): Add
-                          // Participant hidden outright, Consult/Transfer
-                          // folded into the kebab's own menu instead of its
-                          // own icon, and the status tag/kebab/Outcome
-                          // reordered to render in that sequence. Applied
-                          // unconditionally here (not gated by channel type)
-                          // per "for all interactions".
-                          showSessionAddParticipant={false}
+                          // Per explicit follow-up request ("the
+                          // consult/transfer icon in the top right will
+                          // trigger the same popup as the 'conference' icon
+                          // button does now") — opens the voice call
+                          // controls bar's own Consult popover, via the
+                          // `conferenceOpen` state shared with it just
+                          // above. Has no visible effect on THIS page while
+                          // `sessionTransferInKebabMenu` (below) keeps
+                          // folding the standalone button into the kebab
+                          // instead — passed through anyway so it's not
+                          // silently missing if that ever changes.
+                          onSessionConsultTransferClick={(anchorEl) => {
+                            consultAnchorRef.current = anchorEl;
+                            setConferenceOpen(true);
+                          }}
+                          // Per explicit follow-up request ("for all
+                          // interactions move the transfer inside the 3 dots
+                          // menu - move the 3 dots to the left of the
+                          // outcome button and move the status chip to the
+                          // left of the 3 dots button") — two new, Advanced-
+                          // only props on the shared `agent-next-gen-
+                          // transcript.tsx` component (see each one's own
+                          // doc comment there): Consult/Transfer folded into
+                          // the kebab's own menu instead of its own icon,
+                          // and the status tag/kebab/Outcome reordered to
+                          // render in that sequence. Applied unconditionally
+                          // here (not gated by channel type) per "for all
+                          // interactions". ("Add Participant" — once also
+                          // hidden here via its own flag — was removed
+                          // outright from the shared component per a later
+                          // explicit request, so there's nothing left to
+                          // hide at this call site either.)
                           sessionTransferInKebabMenu
                           sessionStatusAndKebabBeforeOutcome
                           // Per explicit request: while reviewing Marcus
@@ -10348,9 +10680,9 @@ export function AgentWorkspaceAdvancedPage({
               sit for a chat channel — see that composer's own doc comment
               for the "why nothing renders there for voice today" this
               reuses). */}
-          {liveVoiceCallInteraction &&
-          liveVoiceCallThread &&
-          !(marcusWebbReviewing && liveVoiceCallInteraction.id === MARCUS_WEBB_ID) ? (
+          {displayedVoiceCallInteraction &&
+          displayedVoiceCallThread &&
+          !(marcusWebbReviewing && displayedVoiceCallInteraction.id === MARCUS_WEBB_ID) ? (
             <VoiceCallControls
               // Per explicit follow-up request/reference screenshot, now
               // that this bar sits directly on the page background instead
@@ -10369,14 +10701,55 @@ export function AgentWorkspaceAdvancedPage({
               // slide-in-from-bottom-4 fade-in-0 duration-200` per explicit
               // follow-up request ("animate up the call controls / action
               // bar when they are instantiated") — tailwindcss-animate's own
-              // entrance utilities, replaying on their own every time this
-              // mounts fresh (a real call starting, or `marcusWebbReviewing`
-              // switching back to `false`) without needing a `key`.
+              // entrance utilities, replaying every time this mounts fresh
+              // (a real call starting, `marcusWebbReviewing` switching back
+              // to `false`, OR — per later explicit follow-up — switching
+              // to a genuinely DIFFERENT live call via the `key` below).
+              //
+              // `key`: forces a clean remount (fresh mute/hold/conference/
+              // consult state) whenever the UNDERLYING call this bar shows
+              // actually changes, without remounting just for navigating
+              // away from and back to the SAME call — see
+              // `displayedVoiceCallInteraction`'s own doc comment above.
+              key={`${displayedVoiceCallInteraction.id}:${displayedVoiceCallThread.id}`}
               className="bg-transparent px-0 pt-2 pb-0 animate-in slide-in-from-bottom-4 fade-in-0 duration-200"
+              conferenceOpen={conferenceOpen}
+              onConferenceOpenChange={handleConferenceOpenChange}
+              consultAnchorRef={consultAnchorRef}
+              // Per explicit follow-up request ("show all participant names
+              // in the assignment card also with a similar 'conference'
+              // icon") — onto `Thread.colleagues` (see that field's own doc
+              // comment, agent-next-gen-interaction-dashboard.tsx). This
+              // page never lifted Hold the same way DeskPage did (see
+              // `displayedVoiceCallInteraction`'s own doc comment above —
+              // "not the hold state yet"), but colleagues is independent of
+              // that and needed on both pages equally.
+              onColleaguesChange={(next) => {
+                setInteractions((prev) =>
+                  prev.map((i) =>
+                    i.id === displayedVoiceCallInteraction.id
+                      ? {
+                          ...i,
+                          threads: i.threads.map((c) =>
+                            c.id === displayedVoiceCallThread.id ? { ...c, colleagues: next } : c
+                          ),
+                        }
+                      : i
+                  )
+                );
+              }}
+              // Seeds this bar's own local `colleagues` state back from the
+              // exact same persisted field `onColleaguesChange` just above
+              // writes to — fixes a confirmed bug ("when I merged another
+              // customer into an existing conference, the conference call
+              // seemed to end, and kicked out the conferencing agent"): see
+              // `initialColleagues`'s own doc comment (agent-next-gen-
+              // voice-call-controls.tsx) for the full root cause.
+              initialColleagues={displayedVoiceCallThread.colleagues}
               onHangUp={() => {
                 setInteractions((prev) =>
                   prev.map((i) =>
-                    i.id === liveVoiceCallInteraction.id ? { ...i, voiceCallEnded: true } : i
+                    i.id === displayedVoiceCallInteraction.id ? { ...i, voiceCallEnded: true } : i
                   )
                 );
                 setVoiceVideoWindowOpen(false);
@@ -10384,10 +10757,20 @@ export function AgentWorkspaceAdvancedPage({
                 // A call that's ended should never leave `marcusWebbReviewing`
                 // stuck `true` for next time — see that state's own doc
                 // comment (above, with the rest of the Marcus Webb state).
-                if (liveVoiceCallInteraction.id === MARCUS_WEBB_ID) setMarcusWebbReviewing(false);
+                if (displayedVoiceCallInteraction.id === MARCUS_WEBB_ID) setMarcusWebbReviewing(false);
               }}
-              elapsedSeconds={clockTick - liveVoiceCallThread.startTick}
-              onAddToast={addToast}
+              mergedInteractions={(displayedVoiceCallInteraction.mergedInteractionIds ?? [])
+                .map((id) => interactions.find((i) => i.id === id))
+                .filter((i): i is Interaction => !!i)
+                .map((i) => ({
+                  id: i.id,
+                  name: i.customerName ?? "Unknown",
+                  selectable: getMergeCandidateKind(i) === "customer",
+                }))}
+              onSelectMergedInteraction={switchActiveInteraction}
+              onUnmergeCalls={() => handleUnmergeCalls(displayedVoiceCallInteraction.id)}
+              onEndAllCalls={() => handleEndAllCalls(displayedVoiceCallInteraction.id)}
+              elapsedSeconds={clockTick - displayedVoiceCallThread.startTick}
               onToggleTranscript={
                 isViewingLiveVoiceCallInteraction
                   ? () => {
@@ -10427,10 +10810,10 @@ export function AgentWorkspaceAdvancedPage({
               // back to without it, matching the reference screenshot's own
               // unmatched-quickdial-number example.
               customerLabel={
-                liveVoiceCallInteraction.customerName ??
-                liveVoiceCallThread.addressLabel ??
-                liveVoiceCallThread.value ??
-                liveVoiceCallInteraction.id
+                displayedVoiceCallInteraction.customerName ??
+                displayedVoiceCallThread.addressLabel ??
+                displayedVoiceCallThread.value ??
+                displayedVoiceCallInteraction.id
               }
             />
           ) : null}
@@ -10597,6 +10980,88 @@ export function AgentWorkspaceAdvancedPage({
           onSecondaryClick={handleStartUnavailable}
         />
       </Modal>
+
+      {/* "Merge Calls" candidate picker — always shown once triggered (even
+          with exactly one candidate), per explicit confirmed scope, rather
+          than auto-targeting. Lists every OTHER interaction with a live
+          voice thread not already in the triggering interaction's own merge
+          group (reuses `findLiveVoiceThread`/`getMergeGroupIds`, no new
+          "is this call live" logic). See `Interaction.mergedInteractionIds`'s
+          own doc comment for the feature this supports.
+
+          Per explicit follow-up request ("keep this modal near the
+          assignment cards, and treat as a popup that's dismissable not a
+          centered modal"): see the identical `Popover`/`virtualAnchorRef`
+          wiring's own doc comment in AgentWorkspace2WithDeskPage.tsx for
+          the full reasoning — this page's independent copy of the same
+          redesign. */}
+      <Popover
+        open={!!mergeCallsPicker}
+        onOpenChange={(next: boolean) => {
+          if (!next) setMergeCallsPicker(null);
+        }}
+        asAnchor
+        modal
+        virtualAnchorRef={mergeCallsAnchorRef}
+        placement="right"
+        align="start"
+        bodyPadding={false}
+        aria-label="Merge Calls"
+        className="w-[320px]"
+        content={(() => {
+          const sourceInteraction = mergeCallsPicker
+            ? interactions.find((i) => i.id === mergeCallsPicker.sourceId)
+            : undefined;
+          const sourceGroupIds = sourceInteraction ? getMergeGroupIds(sourceInteraction) : [];
+          const mergeCandidates = sourceInteraction
+            ? interactions.filter((i) => !sourceGroupIds.includes(i.id) && !!findLiveVoiceThread(i))
+            : [];
+          return (
+            <div className="flex flex-col">
+              <div className="px-4 pt-3 pb-2">
+                <span className="lyra-label text-lyra-fg-default">Merge Calls</span>
+              </div>
+              {mergeCandidates.length === 0 ? (
+                <p className="lyra-body-sm text-lyra-fg-secondary px-4 pb-3">No other active calls to merge.</p>
+              ) : (
+                <div className="flex flex-col">
+                  {mergeCandidates.map((candidate, index) => {
+                    const CandidateIcon = getMergeCandidateIcon(candidate);
+                    return (
+                      <ListItem
+                        key={candidate.id}
+                        leading={<CandidateIcon className="h-4 w-4 text-lyra-fg-secondary" strokeWidth={1.5} aria-hidden="true" />}
+                        title={candidate.customerName ?? "Unknown"}
+                        divider={index < mergeCandidates.length - 1}
+                        onClick={() => setMergeCallsSelectedId(candidate.id)}
+                        className={cn("px-4 py-2.5", mergeCallsSelectedId === candidate.id && "bg-lyra-status-info-subtle")}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+              <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-lyra-border-subtle">
+                <Button variant="outline" size="sm" onClick={() => setMergeCallsPicker(null)}>
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!mergeCallsSelectedId}
+                  onClick={() => {
+                    if (sourceInteraction && mergeCallsSelectedId) {
+                      handleMergeCalls(sourceInteraction.id, mergeCallsSelectedId);
+                    }
+                  }}
+                >
+                  Merge
+                </Button>
+              </div>
+            </div>
+          );
+        })()}
+      >
+        <span style={{ position: "fixed", top: 0, left: 0, width: 0, height: 0 }} />
+      </Popover>
 
       {/* Fired by `fireDismissToast` (`handleDismissInteraction`/
           `handleDismissChannel`), `fireAgentLegStatusToast`

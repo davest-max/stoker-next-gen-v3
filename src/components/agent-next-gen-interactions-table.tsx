@@ -64,6 +64,7 @@ import {
   TableFooter,
   KebabMenuButton,
   type MenuEntry,
+  filterChipVariants,
 } from "@nicecxone/lyra-ui";
 import { CREATE_NEW_CUSTOMERS } from "@nicecxone/lyra-ui/customers-data";
 import { CREATE_NEW_AGENTS } from "@nicecxone/lyra-ui/agents-data";
@@ -76,6 +77,7 @@ import { OUTBOUND_SKILLS } from "@/components/agent-next-gen-outbound-data";
 import {
   SESSION_STATUS_TO_CONTACT_HISTORY_VARIANT,
   type ContactHistoryEntry,
+  type ContactHistoryStatusVariant,
 } from "@/components/agent-next-gen-contact-history";
 import { nextCustomerSortDirection, CURRENT_AGENT_NAME } from "@/components/agent-next-gen-shared-utils";
 import { cn } from "@/lib/utils";
@@ -107,7 +109,18 @@ import {
 // color everywhere in this app. Wider than `ContactInteraction["status"]`'s
 // own binary "open"/"closed" (the per-customer accordion table's type) —
 // per explicit request to "vary the status" for this fuller top-level view.
-export type InteractionHistoryStatus = "Open" | "Pending" | "Escalated" | "Resolved" | "Closed";
+// "New" per explicit follow-up request ("the escalated status in the search
+// app - Assigned to Me can be changed to New") — deliberately NOT added to
+// `SESSION_STATUS_TO_CONTACT_HISTORY_VARIANT` itself (agent-next-gen-
+// contact-history.tsx): that map's own keys are what `INTERACTION_STATUSES`
+// below cycles through for EVERY row's status regardless of owner, and
+// widening it would shift that cycle's distribution for every other
+// owner's rows too, not just the current agent's. "New" only ever appears
+// as a one-off override applied to this agent's own rows specifically (see
+// `buildInteractionHistory`'s own `isMine` branch) — `STATUS_VARIANT`,
+// just below, is this file's own local color-lookup that adds it back in
+// for display purposes only.
+export type InteractionHistoryStatus = "Open" | "Pending" | "Escalated" | "Resolved" | "Closed" | "New";
 
 export interface InteractionHistoryRecord {
   id: string;
@@ -182,6 +195,29 @@ const AGENT_ASSIGN_OPTIONS = ALL_AGENT_NAMES.map((name) => ({ value: name, label
 const SKILL_ASSIGN_OPTIONS = ALL_SKILL_NAMES.map((name) => ({ value: name, label: name }));
 const INTERACTION_TAGS_POOL = ["VIP", "Follow-up", "Billing", "Technical", "Escalation Risk", "New Customer"];
 const INTERACTION_STATUSES = Object.keys(SESSION_STATUS_TO_CONTACT_HISTORY_VARIANT) as InteractionHistoryStatus[];
+// This file's own local status→color lookup — same values
+// `SESSION_STATUS_TO_CONTACT_HISTORY_VARIANT` already provides for
+// Open/Pending/Escalated/Resolved, plus two explicit overrides per later
+// follow-up request ("change the new status ellipse color to bright
+// orange and closed to red"):
+//   - New: "warning" (`bg-lyra-status-warning-strong` — the same bright,
+//     saturated orange token "Open" already uses; this table's own "New"
+//     and "Open" happen to share that color now, by explicit request).
+//   - Closed: "critical" (red) — deliberately diverges from the SHARED
+//     map's own `Closed: "neutral"` (gray), whose own doc comment reasons
+//     "a closed contact isn't a negative outcome the way Escalated is" —
+//     that reasoning still holds for `ContactHistoryCard` itself (left
+//     untouched), just not for how THIS table wants Closed to read.
+// Used in place of the raw imported map everywhere in this file a status
+// needs a color.
+const STATUS_VARIANT: Record<InteractionHistoryStatus, ContactHistoryStatusVariant> = {
+  Open: SESSION_STATUS_TO_CONTACT_HISTORY_VARIANT.Open,
+  Pending: SESSION_STATUS_TO_CONTACT_HISTORY_VARIANT.Pending,
+  Escalated: SESSION_STATUS_TO_CONTACT_HISTORY_VARIANT.Escalated,
+  Resolved: SESSION_STATUS_TO_CONTACT_HISTORY_VARIANT.Resolved,
+  Closed: "critical",
+  New: "warning",
+};
 
 function formatInteractionDate(d: Date): string {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -193,6 +229,15 @@ function formatInteractionDate(d: Date): string {
   return `${mm}/${dd}/${yy} ${hour12}:${minute} ${hour24 >= 12 ? "PM" : "AM"}`;
 }
 
+// Per explicit request ("The Type in the Assigned to me should be inbound
+// email and a few outbound email") — every row `buildInteractionHistory`
+// below actually assigns to the current agent uses one of these two EMAIL
+// entries from `INTERACTION_CHANNELS` instead of that pool's normal full
+// chat/voice/email cycle, which otherwise has no reason to land on email
+// for any particular owner. Filtered (not hardcoded indices) so this stays
+// correct if `INTERACTION_CHANNELS` itself ever changes.
+const EMAIL_INTERACTION_CHANNELS = INTERACTION_CHANNELS.filter((c) => c.type === "email");
+
 /** Deterministic (no `Math.random`, same reasoning every other mock-data
  *  builder in this app follows) — cycles through `CREATE_NEW_CUSTOMERS`
  *  (60 records) and `INTERACTION_CHANNELS` (7) more than once as `count`
@@ -202,8 +247,19 @@ function buildInteractionHistory(count: number): InteractionHistoryRecord[] {
   const now = Date.now();
   return Array.from({ length: count }, (_, i) => {
     const customer = CREATE_NEW_CUSTOMERS[i % CREATE_NEW_CUSTOMERS.length];
-    const source = INTERACTION_CHANNELS[i % INTERACTION_CHANNELS.length];
-    const status = INTERACTION_STATUSES[i % INTERACTION_STATUSES.length];
+    const ownerAssignee = i % 5 === 0 ? "" : INTERACTION_OWNERS[(i * 3) % INTERACTION_OWNERS.length];
+    // See `EMAIL_INTERACTION_CHANNELS`'s own doc comment just above — a row
+    // "Assigned to Me" (this mock agent) is always email, mostly inbound;
+    // every other owner keeps the original full chat/voice/email/in-out
+    // cycle, unaffected.
+    const isMine = ownerAssignee === CURRENT_AGENT_NAME;
+    const source = isMine ? EMAIL_INTERACTION_CHANNELS[i % EMAIL_INTERACTION_CHANNELS.length] : INTERACTION_CHANNELS[i % INTERACTION_CHANNELS.length];
+    const cycledStatus = INTERACTION_STATUSES[i % INTERACTION_STATUSES.length];
+    // Per explicit follow-up request ("the escalated status in the search
+    // app - Assigned to Me can be changed to New") — this agent's own rows
+    // read "New" wherever the normal cycle would have landed on
+    // "Escalated"; every other owner's rows are completely unaffected.
+    const status = isMine && cycledStatus === "Escalated" ? "New" : cycledStatus;
     const isOpen = status === "Open";
     // Spread over roughly the last 90 days, newest-first as `i` grows —
     // real `Date` math (not a formatted-string guess) so the Create Date
@@ -213,9 +269,12 @@ function buildInteractionHistory(count: number): InteractionHistoryRecord[] {
     return {
       id: `ih-${i}`,
       priority: i % 4,
-      ownerAssignee: i % 5 === 0 ? "" : INTERACTION_OWNERS[(i * 3) % INTERACTION_OWNERS.length],
+      ownerAssignee,
       type: source.type,
-      direction: i % 2 === 0 ? "inbound" : "outbound",
+      // "A few" outbound amid mostly inbound — one row in four, not the
+      // original even 50/50 split (`i % 2`), for `isMine` rows only; every
+      // other owner's rows keep that original even split unchanged.
+      direction: isMine ? (i % 4 === 0 ? "outbound" : "inbound") : i % 2 === 0 ? "inbound" : "outbound",
       createDateValue,
       createDate: formatInteractionDate(createDateValue),
       status,
@@ -286,7 +345,7 @@ export function buildContactHistoryEntryFromInteractionRecord(record: Interactio
     id: record.id,
     name: record.customerName,
     statusLabel: record.status,
-    statusVariant: SESSION_STATUS_TO_CONTACT_HISTORY_VARIANT[record.status] ?? "neutral",
+    statusVariant: STATUS_VARIANT[record.status],
     redial: record.type === "voice",
     description: record.context,
     caseId: record.caseId,
@@ -374,7 +433,10 @@ export const INTERACTION_HISTORY_FILTER_FIELD_DEFS: { key: InteractionHistoryFil
 // at runtime).
 const INTERACTION_HISTORY_FILTER_VALUE_OPTIONS: Record<InteractionHistoryFilterKey, { value: string; label: string }[]> = {
   channel: Array.from(new Set(INITIAL_INTERACTION_HISTORY_RECORDS.map((r) => r.channel))).map((v) => ({ value: v, label: v })),
-  status: INTERACTION_STATUSES.map((v) => ({ value: v, label: v })),
+  // "New" appended — see `InteractionHistoryStatus`'s own doc comment for
+  // why it's kept out of `INTERACTION_STATUSES` itself but still needs to
+  // be a real, filterable value here.
+  status: [...INTERACTION_STATUSES, "New" as const].map((v) => ({ value: v, label: v })),
   skill: Array.from(new Set(INITIAL_INTERACTION_HISTORY_RECORDS.map((r) => r.skill))).map((v) => ({ value: v, label: v })),
   inboxAssignee: INBOX_ASSIGNEES.map((v) => ({ value: v, label: v })),
   ownerAssignee: INTERACTION_OWNERS.map((v) => ({ value: v, label: v })),
@@ -516,10 +578,15 @@ function InteractionBulkActionIcons({
   const [sendMessageOpen, setSendMessageOpen] = useState(false);
   const [messageDraft, setMessageDraft] = useState("");
 
-  const changeStatusItems: MenuEntry[] = INTERACTION_STATUSES.map((status) => ({
+  // "New" appended on top of the usual cycled set — see
+  // `InteractionHistoryStatus`'s own doc comment for why it's kept out of
+  // `INTERACTION_STATUSES` itself; still offered here as a real, pickable
+  // status (an agent should be able to set it by hand, not just see it on
+  // auto-generated rows).
+  const changeStatusItems: MenuEntry[] = [...INTERACTION_STATUSES, "New" as const].map((status) => ({
     id: status,
     label: status,
-    icon: <Badge shape="circle" dot size="sm" variant={SESSION_STATUS_TO_CONTACT_HISTORY_VARIANT[status]} aria-hidden="true" />,
+    icon: <Badge shape="circle" dot size="sm" variant={STATUS_VARIANT[status]} aria-hidden="true" />,
     onClick: () => {
       onChangeStatus(status);
       setChangeStatusOpen(false);
@@ -698,6 +765,20 @@ export function InteractionsListView({ onAddToast, onOpenInteraction, activeReco
   // back) starts fresh rather than keeping stale bulk edits around.
   const [records, setRecords] = useState<InteractionHistoryRecord[]>(INITIAL_INTERACTION_HISTORY_RECORDS);
   const [searchQuery, setSearchQuery] = useState("");
+  // Quick filter — per explicit request ("default the all contacts page to
+  // 'assigned to me' view. And show no other rows. Provide a quick-filter
+  // that's pre-selected called 'assigned to me'"): a standalone boolean
+  // toggle, defaulting `true`, distinct from the generic "+ Filter" add-menu
+  // mechanism below (that one's `ownerAssignee` field is still there for
+  // picking a DIFFERENT/specific assignee — this is a one-click "just show
+  // mine" shortcut, the far more common thing an agent opening this table
+  // actually wants first). Rendered as its own always-visible `FilterChip`-
+  // styled toggle (`filterChipVariants`, not the full `FilterChip` component
+  // — no popover/value-list needed for a plain on/off), passed to
+  // `TableToolbar`'s own `leadingFilters` slot, below — rendered right
+  // after search and before every other (removable, `filterDefs`-driven)
+  // filter, per a later explicit follow-up request.
+  const [assignedToMeOnly, setAssignedToMeOnly] = useState(true);
   // Which fields the agent has added via the "+ Filter" menu — same
   // "starts empty, nothing renders until explicitly added" shape
   // `CustomersListView`'s own `addedFilterKeys` uses. Can hold
@@ -777,6 +858,16 @@ export function InteractionsListView({ onAddToast, onOpenInteraction, activeReco
     const dateBounds = createDateRangeAdded ? dateRangeBounds(createDateRangeValue, createDateRangeCustom) : {};
     const query = searchQuery.trim().toLowerCase();
     return records.filter((r) => {
+      if (assignedToMeOnly && r.ownerAssignee !== CURRENT_AGENT_NAME) return false;
+      // Per explicit request ("a handful of closed assignments ... at the
+      // bottom of the Assigned to Me list"): closed work gets its own
+      // separate section below the main table instead (`closedAssignedToMe`,
+      // below) — excluded here so it doesn't also show up scattered through
+      // the main sorted/paginated list. Only while the "Assigned to Me"
+      // quick-filter is actually on; the generic "+ Filter" → Status field
+      // still lets an agent explicitly filter the main table BY "Closed"
+      // (or anything else) same as before.
+      if (assignedToMeOnly && r.status === "Closed") return false;
       if (query) {
         const haystack = [r.customerName, r.caseId, r.channel, r.skill, r.context, r.ownerAssignee, r.inboxAssignee].join(" ").toLowerCase();
         if (!haystack.includes(query)) return false;
@@ -793,7 +884,32 @@ export function InteractionsListView({ onAddToast, onOpenInteraction, activeReco
       if (dateBounds.to && r.createDateValue > dateBounds.to) return false;
       return true;
     });
-  }, [records, searchQuery, filterValues, createDateRangeAdded, createDateRangeValue, createDateRangeCustom]);
+  }, [records, searchQuery, filterValues, createDateRangeAdded, createDateRangeValue, createDateRangeCustom, assignedToMeOnly]);
+
+  // "A handful of closed assignments, that have the agent's name assigned
+  // to that work" — per explicit request, rendered as real `TableRow`s
+  // appended directly after the main rows in the SAME grid, no section
+  // header (see this file's own JSX further down, inside `TableBody` —
+  // two follow-up corrections landed here: an earlier pass used a separate
+  // `ListItem`-based card below the table ("should list as a table row not
+  // its own card. Just a Lyra-based grid"), then a `TableGroupRow` section
+  // header ("doesn't need its own sub-section title, just list them")),
+  // not mixed into `filtered`/`sorted` above. Deliberately NOT affected by
+  // the main
+  // table's own search/filter/date-range state — this is a fixed, separate
+  // "recently closed, still mine" glance, same role `ContactHistoryCard`'s
+  // own date-range sections play elsewhere in this app. Capped at 5 (sorted
+  // most-recent-first) — "a handful," not the full closed history. Only
+  // meaningful while `assignedToMeOnly` is on; empty otherwise (closed rows
+  // already show inline, unexcluded, in the main table once that quick
+  // filter is off — see `filtered`'s own Closed-exclusion comment above).
+  const closedAssignedToMe = useMemo(() => {
+    if (!assignedToMeOnly) return [];
+    return records
+      .filter((r) => r.ownerAssignee === CURRENT_AGENT_NAME && r.status === "Closed")
+      .sort((a, b) => b.createDateValue.getTime() - a.createDateValue.getTime())
+      .slice(0, 5);
+  }, [records, assignedToMeOnly]);
 
   // Priority/Create Date are real numbers/dates; Resolution/First Response
   // Time sort by their shared `RESOLUTION_TIMES` pool's own index (already
@@ -917,7 +1033,7 @@ export function InteractionsListView({ onAddToast, onOpenInteraction, activeReco
     if (key === "status") {
       return (
         <span className="inline-flex items-center gap-1.5">
-          <Badge shape="circle" dot size="sm" variant={SESSION_STATUS_TO_CONTACT_HISTORY_VARIANT[record.status]} aria-hidden="true" />
+          <Badge shape="circle" dot size="sm" variant={STATUS_VARIANT[record.status]} aria-hidden="true" />
           {record.status}
         </span>
       );
@@ -937,6 +1053,36 @@ export function InteractionsListView({ onAddToast, onOpenInteraction, activeReco
         filterValues={filterValues}
         onFilterChange={handleFilterChange}
         onFilterClear={clearAllFilters}
+        // "Assigned to Me" quick filter — per explicit request ("keep the
+        // 'Assigned to Me' filter button in the All Contacts page next to
+        // the Search field. List other filter types after that button"): a
+        // standalone, always-visible toggle (not removable via the
+        // "+ Filter" menu the way every `filterDefs` chip is) that starts
+        // pre-selected. This needed lyra-ui's own `TableToolbar` to gain a
+        // new `leadingFilters` slot (table.tsx) — the previous approach
+        // (putting this button first inside the `filters` prop below) put
+        // it AFTER `filterDefs`' own auto-rendered chips instead of before
+        // them, since `TableToolbar` always renders `filterDefs` first and
+        // `filters` second; `leadingFilters` is a third, earlier slot
+        // rendered immediately after search, specifically so a pinned quick
+        // filter like this one can never end up sandwiched behind whichever
+        // fields the agent has added. Plain `<button>` styled with
+        // `filterChipVariants` directly (same technique
+        // `ContactHistoryDateFilterChip` already uses for ITS own trigger,
+        // agent-next-gen-contact-history.tsx) rather than the full
+        // `FilterChip` component — there's no value list/popover here, just
+        // an on/off state, so `FilterChip`'s own multi-select machinery
+        // would be more than this needs.
+        leadingFilters={
+          <button
+            type="button"
+            aria-pressed={assignedToMeOnly}
+            onClick={() => setAssignedToMeOnly((v) => !v)}
+            className={cn(filterChipVariants({ variant: assignedToMeOnly ? "active" : "default" }), "rounded-lyra-md")}
+          >
+            <span className="lyra-body-md-emphasis whitespace-nowrap">Assigned to Me</span>
+          </button>
+        }
         // The "+ Filter" add-menu itself, right after the `filterDefs`-
         // driven chips it decides the contents of — same composition/order
         // `CustomersListView`'s own `filters` slot uses (`Select multiple
@@ -1075,6 +1221,38 @@ export function InteractionsListView({ onAddToast, onOpenInteraction, activeReco
                 </TableCell>
               </TableRow>
             ))}
+            {/* "A handful of closed assignments, that have the agent's name
+                assigned to that work" — per explicit follow-up request
+                ("should list as a table row not its own card. Just a
+                Lyra-based grid"), real `TableRow`s in this SAME grid (same
+                columns, same `renderCell`), appended directly after the
+                main rows above with no section header/label at all (a
+                follow-up correction: "doesn't need its own sub-section
+                title, just list them" — an earlier pass used a
+                `TableGroupRow` here). See `closedAssignedToMe`'s own doc
+                comment for why this is a distinct, fixed (non-paginated)
+                list rather than just unfiltered rows mixed into the main
+                sorted/paginated one above. No row-selection checkbox here
+                (`closedAssignedToMe` is deliberately outside
+                `selectedIds`/the bulk-actions machinery, which only knows
+                about `filtered`/`sorted`) — the cell still reserves the
+                same width so columns stay aligned with the rows above. */}
+            {closedAssignedToMe.map((record) => (
+                <TableRow key={record.id} className="cursor-pointer" onClick={() => onOpenInteraction?.(record)}>
+                  <TableCell className="w-[40px] shrink-0" />
+                  {columnOrder.map((key) => (
+                    <TableCell key={key} columnKey={key} className={cn(INTERACTION_HISTORY_COLUMN_CONFIG[key].flex, INTERACTION_HISTORY_COLUMN_CONFIG[key].minWidth)}>
+                      {renderCell(record, key)}
+                    </TableCell>
+                  ))}
+                  <TableCell
+                    className="w-[48px] shrink-0 sticky right-0 bg-lyra-bg-surface-base"
+                    onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                  >
+                    <InteractionHistoryRowActions record={record} />
+                  </TableCell>
+                </TableRow>
+              ))}
           </TableBody>
         </Table>
       </div>

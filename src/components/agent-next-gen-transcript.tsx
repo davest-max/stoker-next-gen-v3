@@ -49,7 +49,6 @@ import {
   ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
-  UserPlus,
   UserX,
   ArrowDown,
   Paperclip,
@@ -1120,18 +1119,17 @@ export function TranscriptSessionSeparator({
   showConsultTransferAndAddParticipant = true,
   showKebabMenu = true,
   outcomeAfterStatus = false,
-  // Per explicit follow-up request (Advanced only — "hide the add
-  // participant icon button ... move the transfer inside the 3 dots menu
-  // ... move the 3 dots to the left of the outcome button and move the
-  // status chip to the left of the 3 dots button"): these three are
-  // additive/independent of the three props just above, not replacements —
-  // `showConsultTransferAndAddParticipant` still hides BOTH buttons
-  // together for 2.0 Phase 1's own existing usage; these let a caller keep
-  // Consult/Transfer while hiding just Add Participant, folding Transfer
-  // into the kebab instead of showing it as its own icon, and reordering
+  // Per explicit follow-up request (Advanced only — "move the transfer
+  // inside the 3 dots menu ... move the 3 dots to the left of the outcome
+  // button and move the status chip to the left of the 3 dots button"):
+  // these are additive/independent of the three props just above, not
+  // replacements — `showConsultTransferAndAddParticipant` still hides the
+  // Consult/Transfer button outright for 2.0 Phase 1's own existing usage;
+  // these let a caller keep Consult/Transfer while folding Transfer into
+  // the kebab instead of showing it as its own icon, and reordering
   // Status/Kebab/Outcome independently of `outcomeAfterStatus`'s own
   // status-then-outcome arrangement. See each prop's own doc comment below.
-  showAddParticipant = true,
+  onConsultTransferClick,
   transferInKebabMenu = false,
   statusAndKebabBeforeOutcome = false,
   controlsReadOnly = false,
@@ -1323,13 +1321,16 @@ export function TranscriptSessionSeparator({
    *  site, keep the cluster exactly as before — only the one 2.0 call site
    *  threads `false` through). */
   showActionCluster?: boolean;
-  /** Hides just the "Add Participant" and "Consult / Transfer" icon
-   *  buttons within this cluster, leaving the status tag, Outcome, and
-   *  "Unassign & Dismiss" untouched — per explicit request (Agent Workspace
-   *  2.0 Phase 1 only). Independent of `showActionCluster` above (which
-   *  hides the whole cluster): a consumer can hide just these two buttons
-   *  while keeping everything else in the cluster exactly as before.
-   *  Default `true` (every other call site keeps both buttons). */
+  /** Hides just the "Consult / Transfer" icon button within this cluster,
+   *  leaving the status tag, Outcome, and "Unassign & Dismiss" untouched —
+   *  per explicit request (Agent Workspace 2.0 Phase 1 only). Independent
+   *  of `showActionCluster` above (which hides the whole cluster): a
+   *  consumer can hide just this button while keeping everything else in
+   *  the cluster exactly as before. Default `true` (every other call site
+   *  keeps it). Named for the pair it used to be ("Add Participant" was
+   *  removed outright per later explicit request — "remove the add
+   *  participant icon in the top right" — rather than kept behind its own
+   *  flag, since nothing renders it anymore regardless). */
   showConsultTransferAndAddParticipant?: boolean;
   /** Hides just the "More Options" kebab (Send/Download Transcript,
    *  Translate Messages) within this cluster, leaving the status tag,
@@ -1348,22 +1349,36 @@ export function TranscriptSessionSeparator({
    *  Workspace 2.0 Phase 1 only). Default `false` (every other call site
    *  keeps Outcome in its original, leading position). */
   outcomeAfterStatus?: boolean;
-  /** Hides just the "Add Participant" icon button within this cluster,
-   *  leaving Consult/Transfer, the status tag, Outcome, and "Unassign &
-   *  Dismiss" untouched — per explicit follow-up request (Advanced only).
-   *  ANDed with `showConsultTransferAndAddParticipant` above (both must be
-   *  true for Add Participant to render) rather than a replacement for it,
-   *  so 2.0 Phase 1's existing "hide both together" usage is unaffected.
-   *  Default `true` (every other call site keeps Add Participant). */
-  showAddParticipant?: boolean;
-  /** Per explicit follow-up request (Advanced only, same request as
-   *  `showAddParticipant` above): hides the standalone "Consult / Transfer"
-   *  icon button and instead adds a "Consult / Transfer" row to the kebab
-   *  ("More Options") menu just below, reusing the same `TransferIcon` and
-   *  sitting first in that menu's item list. Purely decorative/unwired,
-   *  same as the standalone button it replaces (see that button's own doc
-   *  comment/rule #30) — clicking it does nothing yet either. Has no effect
-   *  while `showKebabMenu` is false (nowhere to add the row to) or while
+  /** Fired when the standalone "Consult / Transfer" icon button is
+   *  clicked, for a VOICE session only (`channelType === "voice"` — this
+   *  component itself gates the wiring, so a caller doesn't need to check
+   *  channel type before passing this in). Per explicit follow-up request
+   *  ("the consult/transfer icon in the top right will trigger the same
+   *  popup as the 'conference' icon button does now"): this button used to
+   *  be purely decorative/unwired (rule #30) — it now opens the exact same
+   *  Consult popover the voice call controls bar's own "Consult" button
+   *  does, by sharing that bar's `conferenceOpen` state (lifted to
+   *  whichever page renders both — see `VoiceCallControlsProps.
+   *  onConferenceOpenChange`'s own doc comment). Omit to leave this button
+   *  with no `onClick` at all (chat/sms/whatsapp/email sessions, or a page
+   *  that hasn't wired a live voice call controls bar).
+   *
+   *  Takes the clicked button's own element (`e.currentTarget`, passed
+   *  through at this button's own `onClick` below) — per explicit request
+   *  ("show the consult popup next to that selection"), the caller stashes
+   *  this into `VoiceCallControlsProps.consultAnchorRef` so the popover
+   *  repositions onto THIS button instead of always opening down at the
+   *  call-controls bar's own Consult button, no matter which one was
+   *  actually clicked. */
+  onConsultTransferClick?: (anchorEl: HTMLElement) => void;
+  /** Per explicit follow-up request (Advanced only): hides the standalone
+   *  "Consult / Transfer" icon button and instead adds a "Consult /
+   *  Transfer" row to the kebab ("More Options") menu just below, reusing
+   *  the same `TransferIcon` and sitting first in that menu's item list.
+   *  That kebab row stays purely decorative/unwired either way (clicking
+   *  it does nothing) — only the standalone button above ever calls
+   *  `onConsultTransferClick`. Has no effect while `showKebabMenu` is false
+   *  (nowhere to add the row to) or while
    *  `showConsultTransferAndAddParticipant` is false (Transfer already
    *  hidden outright). Default `false` (every other call site keeps
    *  Transfer as its own standalone icon). */
@@ -1797,7 +1812,15 @@ export function TranscriptSessionSeparator({
               `showActionCluster` — see that prop's own doc comment for the
               2.0-only reasoning. */}
           {showActionCluster && (
-          <div className="shrink-0 flex items-center gap-1">
+          <div className="shrink-0 flex items-center gap-2">
+            {/* `gap-2` (was `gap-1`) — per explicit request ("increase the
+                padding between the add participant, transfer and outcome
+                icon buttons ... need a larger area to target"): doubles the
+                breathing room between every icon in this cluster (Add
+                Participant/Consult-Transfer/Outcome/kebab alike) so an
+                adjacent pair of small `icon-sm` targets doesn't sit close
+                enough to invite a mis-click, without changing any
+                individual button's own size. */}
             {/* Per explicit follow-up request: once this SESSION reads
                 "Closed" (`isClosed` — the exact same flag that already
                 locks the status tag below), Consult/Transfer/Outcome/
@@ -1809,22 +1832,34 @@ export function TranscriptSessionSeparator({
                 far enough.) The status tag itself is untouched here — it's
                 not one of these icons, and still needs to show "Closed" as
                 its own label. */}
-            {/* Add Participant — leading item in this cluster, immediately
-                left of Consult/Transfer, per explicit request/reference
-                screenshot. Purely decorative/unwired, same as Transfer
-                right next to it (see that button's own doc comment/rule
-                #30) — there's no real multi-party call model in this
-                prototype for this to add anyone to. Same `!isClosed &&
-                !isNewThread` gate as the rest of this cluster: nothing to
-                add a participant to on a closed or still-draft thread
-                either. */}
-            {showConsultTransferAndAddParticipant && showAddParticipant && !isClosed && !isNewThread && (
-              <Button variant="icon" size="icon-sm" title="Add Participant" className="text-lyra-fg-secondary">
-                <UserPlus className="h-4 w-4" strokeWidth={1.5} />
-              </Button>
-            )}
+            {/* Consult / Transfer — per explicit follow-up request ("remove
+                the add participant icon in the top right. The
+                consult/transfer icon in the top right will trigger the
+                same popup as the 'conference' icon button does now"): the
+                "Add Participant" icon that used to lead this cluster is
+                gone outright (there was no real multi-party call model
+                behind it — see this button's own history, rule #30), and
+                this button is no longer purely decorative for a live voice
+                session — `onConsultTransferClick` (only ever passed, and
+                only ever wired, for `channelType === "voice"`) opens the
+                exact same Consult popover the voice call controls bar's own
+                "Consult" button does, via that bar's lifted
+                `conferenceOpen` state. Every other channel type keeps the
+                original no-op button (no live call, no popover to open).
+                Same `!isClosed && !isNewThread` gate as the rest of this
+                cluster. */}
             {showConsultTransferAndAddParticipant && !transferInKebabMenu && !isClosed && !isNewThread && (
-              <Button variant="icon" size="icon-sm" title="Consult / Transfer" className="text-lyra-fg-secondary">
+              <Button
+                variant="icon"
+                size="icon-sm"
+                title="Consult / Transfer"
+                className="text-lyra-fg-secondary"
+                onClick={
+                  channelType === "voice"
+                    ? (e: React.MouseEvent<HTMLButtonElement>) => onConsultTransferClick?.(e.currentTarget)
+                    : undefined
+                }
+              >
                 <TransferIcon />
               </Button>
             )}
@@ -1997,8 +2032,15 @@ export function TranscriptSessionSeparator({
                       onValueChange={outcome.onDispositionChange}
                     />
                     <Textarea
+                      // Per explicit request ("double the window size of
+                      // the Summary field ... a user needs to better scan
+                      // the autosummary that's generated"): `rows` was 5,
+                      // doubled to 10 — this Textarea's own visible height
+                      // is exactly what "window space to scan" means for a
+                      // scrollable text field, so `rows` (not the popover's
+                      // own `w-80` width, untouched) is the right knob.
                       label="Summary"
-                      rows={5}
+                      rows={10}
                       value={outcome.summary}
                       onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => outcome.onSummaryChange(e.target.value)}
                     />
@@ -2006,25 +2048,29 @@ export function TranscriptSessionSeparator({
                 }
               >
                 <Button
-                  variant="icon"
-                  size="icon-sm"
+                  variant="ghost"
+                  size="sm"
                   title="Outcome"
                   disabled={controlsReadOnly}
-                  className={cn("text-lyra-fg-secondary", outcomeAfterStatus && "order-2", statusAndKebabBeforeOutcome && "order-3")}
+                  className={cn(
+                    "shrink-0 disabled:opacity-100",
+                    outcomeAfterStatus && "order-2",
+                    statusAndKebabBeforeOutcome && "order-3"
+                  )}
                   onClick={(e: React.MouseEvent) => e.stopPropagation()}
                 >
-                  {/* Per explicit request ("make the outcome check button
-                      a solid blue circle"): swaps the outline `CircleCheck`
-                      lucide icon for lyra-ui's own `SuccessIconSolid` (a
-                      filled circle + white checkmark, recolorable via
-                      `text-*` since its circle is `fill="currentColor"`)
-                      — same component `WarningIconSolid` a few hundred
-                      lines up already uses for its own solid badge. Kept
-                      the existing `text-lyra-status-info-strong` blue tint
-                      rather than switching to the icon's "success" green
-                      default, matching the blue this Outcome icon has
-                      always used. */}
-                  <SuccessIconSolid className="h-4 w-4 text-lyra-status-info-strong" />
+                  {/* Per explicit follow-up request ("remove the chip
+                      design ... simply show the icon with the word and no
+                      pill shape"): back to plain icon+label content inside
+                      a normal `Button`, not `Tag shape="pill"` — the pill
+                      chrome/background is gone, the label stays (unlike
+                      Consult/Transfer, which stays icon-only). Same
+                      `SuccessIconSolid` glyph/blue tint this button has
+                      always used, carried onto the label text too so the
+                      two read as one tinted unit rather than a blue icon
+                      next to plain gray text. */}
+                  <SuccessIconSolid className="h-3.5 w-3.5 text-lyra-status-info-strong" />
+                  <span className="text-lyra-status-info-strong">Outcome</span>
                 </Button>
               </Popover>
             ) : (
@@ -2035,19 +2081,25 @@ export function TranscriptSessionSeparator({
               // `isClosed`, so a just-closed CURRENT session reads
               // identically (no icon) rather than a static disabled one.
               !isClosed && (
-                <Button variant="icon" size="icon-sm" title="Outcome" disabled={controlsReadOnly} className={cn("text-lyra-fg-secondary", outcomeAfterStatus && "order-2", statusAndKebabBeforeOutcome && "order-3")}>
-                  {/* Per explicit request ("make the outcome check button
-                      a solid blue circle"): swaps the outline `CircleCheck`
-                      lucide icon for lyra-ui's own `SuccessIconSolid` (a
-                      filled circle + white checkmark, recolorable via
-                      `text-*` since its circle is `fill="currentColor"`)
-                      — same component `WarningIconSolid` a few hundred
-                      lines up already uses for its own solid badge. Kept
-                      the existing `text-lyra-status-info-strong` blue tint
-                      rather than switching to the icon's "success" green
-                      default, matching the blue this Outcome icon has
-                      always used. */}
-                  <SuccessIconSolid className="h-4 w-4 text-lyra-status-info-strong" />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  title="Outcome"
+                  disabled={controlsReadOnly}
+                  className={cn(
+                    "shrink-0 disabled:opacity-100",
+                    outcomeAfterStatus && "order-2",
+                    statusAndKebabBeforeOutcome && "order-3"
+                  )}
+                >
+                  {/* Same plain icon+label treatment as the popover-trigger
+                      branch above — see its own doc comment for the full
+                      reasoning. This branch covers a historical session
+                      with no live `outcome` prop wired (nothing to open a
+                      popover for), so it's otherwise identical minus the
+                      `Popover` wrapper/`onClick` stopPropagation. */}
+                  <SuccessIconSolid className="h-3.5 w-3.5 text-lyra-status-info-strong" />
+                  <span className="text-lyra-status-info-strong">Outcome</span>
                 </Button>
               )
             ))}
@@ -2419,7 +2471,7 @@ export function InteractionTranscript({
   showSessionConsultTransferAndAddParticipant = true,
   showSessionKebabMenu = true,
   sessionOutcomeAfterStatus = false,
-  showSessionAddParticipant = true,
+  onSessionConsultTransferClick,
   sessionTransferInKebabMenu = false,
   sessionStatusAndKebabBeforeOutcome = false,
   sessionControlsReadOnly = false,
@@ -2723,9 +2775,8 @@ export function InteractionTranscript({
    *  position). */
   sessionOutcomeAfterStatus?: boolean;
   /** Passed straight through to every `TranscriptSessionSeparator` below as
-   *  `showAddParticipant` — see that prop's own doc comment. Default `true`
-   *  (every other call site keeps Add Participant). */
-  showSessionAddParticipant?: boolean;
+   *  `onConsultTransferClick` — see that prop's own doc comment. */
+  onSessionConsultTransferClick?: (anchorEl: HTMLElement) => void;
   /** Passed straight through to every `TranscriptSessionSeparator` below as
    *  `transferInKebabMenu` — see that prop's own doc comment. Default
    *  `false` (every other call site keeps Transfer as its own standalone
@@ -3072,6 +3123,8 @@ export function InteractionTranscript({
         nextBestAction={customerContextOverview.nextBestAction}
         nextBestActionContent={customerContextOverview.nextBestActionContent}
         nextBestActionBare={customerContextOverview.nextBestActionBare}
+        transferHistoryContent={customerContextOverview.transferHistoryContent}
+        transferHistoryBare={customerContextOverview.transferHistoryBare}
         // Per explicit request ("put the customer summary content inside
         // the customer profile accordion") — see `detailedSummary`'s own
         // doc comment (lyra-ui/contact-overview.tsx) for what this renders.
@@ -3752,7 +3805,7 @@ export function InteractionTranscript({
                   showConsultTransferAndAddParticipant={showSessionConsultTransferAndAddParticipant}
                   showKebabMenu={showSessionKebabMenu}
                   outcomeAfterStatus={sessionOutcomeAfterStatus}
-                  showAddParticipant={showSessionAddParticipant}
+                  onConsultTransferClick={onSessionConsultTransferClick}
                   transferInKebabMenu={sessionTransferInKebabMenu}
                   statusAndKebabBeforeOutcome={sessionStatusAndKebabBeforeOutcome}
                   controlsReadOnly={sessionControlsReadOnly}

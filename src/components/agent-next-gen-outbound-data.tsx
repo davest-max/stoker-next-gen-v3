@@ -357,15 +357,18 @@ export const OUTBOUND_SKILLS: NonNullable<CreateNewOutboundConfig["groups"][numb
 
 // Every group the "New Outbound" flow could show — kept as its own named
 // constant, separate from `OUTBOUND_CONFIG.groups` below, so any group can
-// be hidden from the "Choose group" dropdown without deleting it: per
+// be hidden from the "Choose group" row list without deleting it: per
 // explicit request ("hide it don't destroy it"), a hidden group's
-// definition stays fully intact here, just filtered out (by id, via
-// `HIDDEN_OUTBOUND_GROUP_IDS` below) before being handed to `CreateNew`.
-// Restoring one later is a one-line revert (add/remove its id in that
-// array), not re-authoring the group from scratch. "Dial Pad" (below) used
-// to be this mechanism's only example — it's no longer hidden this way
-// (see its own doc comment), but the mechanism itself stays in place for
-// any future group that needs it.
+// definition stays fully intact here, just marked `hiddenFromGroupList`
+// (lyra-ui's own `CreateNewOutboundGroup` field — see "customers" below
+// for the current example). Restoring one later is a one-line revert
+// (drop that one field), not re-authoring the group from scratch. "Dial
+// Pad" used to be this mechanism's only example (via a since-removed
+// `HIDDEN_OUTBOUND_GROUP_IDS` id list, which fully excluded a group from
+// `outbound.groups` rather than just its row — replaced by
+// `hiddenFromGroupList` once a later request needed a hidden group to
+// stay searchable) — it's no longer hidden at all, but the mechanism
+// stays in place for any future group that needs it.
 export const OUTBOUND_GROUPS: CreateNewOutboundConfig["groups"] = [
   // No dedicated "Favorites" entry in the group dropdown, per explicit
   // request — this "all" entry replaces it as the DEFAULT/starting
@@ -428,45 +431,23 @@ export const OUTBOUND_GROUPS: CreateNewOutboundConfig["groups"] = [
   { id: "partner-network", label: "Partner Network", kind: "empty", emptyMessage: "No partner network contacts yet", icon: directoryCategoryIcon() },
   { id: "vendor-directory", label: "Vendor Directory", kind: "empty", emptyMessage: "No vendor directory contacts yet", icon: directoryCategoryIcon() },
   { id: "regional-offices", label: "Regional Offices", kind: "empty", emptyMessage: "No regional offices contacts yet", icon: directoryCategoryIcon() },
-  // Kept in `OUTBOUND_GROUPS` (not deleted) but hidden from the visible
-  // group list via `HIDDEN_OUTBOUND_GROUP_IDS` below — per explicit
-  // follow-up request ("keep dial pad but not customers"), Customers no
-  // longer appears as a row. Definition left intact so it can be restored
-  // by simply removing its id from that array, same as any other
-  // hide/restore case that mechanism already supports.
-  { id: "customers", label: "Customers", contacts: OUTBOUND_CUSTOMERS, icon: customerCategoryIcon() },
+  // Kept browsable-row-hidden via `hiddenFromGroupList` (lyra-ui's own
+  // `CreateNewOutboundGroup` field) rather than removed from
+  // `OUTBOUND_GROUPS`/excluded at the render call site — per the original
+  // explicit request ("keep dial pad but not customers"), Customers still
+  // doesn't appear as a row an agent can browse into. Per a LATER explicit
+  // request ("entering a search term that matches a customer name, list
+  // that as a search result — the search field can search customer
+  // names"), it now stays fully present in `outbound.groups` (no render-
+  // site filtering at all — see each tier's own `<CreateNew outbound=
+  // {{...}}>` call site) so the "All" group's own cross-group search still
+  // finds it by name; only `hiddenFromGroupList` keeps it out of the
+  // clickable row list itself. This is exactly the "searchable but not
+  // browsable" split `hiddenFromGroupList`'s own doc comment
+  // (create-new.tsx) was added for — see that field for the general
+  // mechanism.
+  { id: "customers", label: "Customers", contacts: OUTBOUND_CUSTOMERS, icon: customerCategoryIcon(), hiddenFromGroupList: true },
 ];
-
-// Group ids hidden from the "New Outbound" group list without being
-// removed from `OUTBOUND_GROUPS` above — see that constant's own doc
-// comment for why. Add/remove ids here to hide/restore a group; the
-// group's own definition never needs to change. "customers" is hidden
-// here per explicit request ("keep dial pad but not customers").
-//
-// Deliberately NOT applied to `OUTBOUND_CONFIG.groups` below (a real,
-// confirmed bug this used to have): `OUTBOUND_CONFIG` is the single
-// shared object every tier page spreads into its own `outboundConfig`,
-// which feeds BOTH the New Outbound picker's own browsable group list
-// AND `useOutboundAddButton`'s `contactsById` lookup (lyra-ui,
-// create-new.tsx) — the map `getHeaderAction` uses to resolve an
-// already-known customer's "+" (Add Channel) button on the record
-// header/`InteractionNavItem`. Filtering "customers" out of
-// `OUTBOUND_CONFIG.groups` itself hid it from BOTH, so any real,
-// directory-backed customer interaction (started via the Customers
-// desk-tab table or the Search panel's Customers sub-tab — Advanced/
-// Premium tiers, which are supposed to keep the full group list, per
-// each tier's own `outboundConfig` memo doc comment) silently fell back
-// to the plain `AddChannelAdHocButton` instead of `OutboundAddButton`,
-// since `contactsById.get(interaction.id)` could never find a match:
-// the confirmed root cause of "both the InteractionNavItem and the
-// header toggle group show the custom [ad-hoc] input" for a known
-// Advanced-tier customer found via Search. Each tier's own `<CreateNew
-// outbound={{...}}>` render call site now applies this exclusion itself
-// (filtering `outboundConfig.groups`, not `OUTBOUND_CONFIG.groups`) so
-// only that picker's own browsable list loses "customers" — the lookup
-// map every tier's `useOutboundAddButton` builds from `outboundConfig`
-// keeps it.
-export const HIDDEN_OUTBOUND_GROUP_IDS: string[] = ["customers"];
 
 export const OUTBOUND_CONFIG: CreateNewOutboundConfig = {
   outboundTitle: "New Outbound",

@@ -242,6 +242,23 @@ export interface Thread {
    *  `undefined` whenever a fresh voice `Thread` replaces this one (every
    *  `newChannel` builder simply omits it). */
   heldByAgent?: boolean;
+  /** Every OTHER person currently merged into this voice call (beyond the
+   *  primary customer and the agent) — per explicit follow-up request
+   *  ("show all participant names in the assignment card also with a
+   *  similar 'conference' icon"), lifted out of `VoiceCallControls`'s own
+   *  local `colleagues` state (agent-next-gen-voice-call-controls.tsx, its
+   *  own `CallColleague` — this is deliberately a smaller, separate shape:
+   *  the left-nav card only ever needs a name to list, never per-colleague
+   *  hold state) for the same reason `heldByAgent` just above was: this
+   *  card has to show a conference indicator/roster regardless of which
+   *  interaction the agent is currently looking at, which a plain local
+   *  `useState` inside a bar that only renders for the ACTIVE interaction
+   *  can't do on its own. Set/cleared by each page's own
+   *  `onColleaguesChange` handler passed to `VoiceCallControls`; reset to
+   *  `undefined` whenever a fresh voice `Thread` replaces this one (every
+   *  `newChannel` builder simply omits it), same convention `heldByAgent`
+   *  already follows. */
+  colleagues?: { id: string; name: string }[];
   /** REMOVED (was `interactionId?: string`) — a plain synthesized digit
    *  shown on this Thread's `ChannelToggle` tooltip as "#{interactionId}",
    *  genuinely redundant now that `Contact.contactId` exists as the real,
@@ -517,6 +534,41 @@ export interface Interaction {
    * status `TRANSCRIPT_SESSIONS`/`_VOICE`/`_EMAIL` otherwise assigns it.
    */
   threadStatuses?: Record<string, string>;
+  /**
+   * Ids of every OTHER Interaction currently bridged with this one into a
+   * single merged voice call (symmetric — every member lists every other
+   * member), via the "Merge Calls" kebab action. Undefined/empty when this
+   * interaction isn't part of a merge. Distinct from `Thread.colleagues`
+   * (an internal agent/skill merged into ONE customer's own thread via
+   * Consult/Conference) — this instead bridges two fully separate,
+   * independently-dialed Interactions, each keeping its own thread,
+   * transcript, and customer record. Names/live state for the other members
+   * are never stored here — always looked up fresh via
+   * `interactions.find(...)`, same as every other id reference in this
+   * file.
+   */
+  mergedInteractionIds?: string[];
+
+  /**
+   * Set only for an interaction that arrived via a warm transfer (today:
+   * only the pre-seeded "received a transferred call" demo scenario) — the
+   * chain of prior agents who already handled this customer before it
+   * reached whoever currently owns the interaction, oldest-first (index 0
+   * is who the customer originally reached), plus a short summary of what
+   * happened on each leg. Rendered as the record header's own "Transfer
+   * History" card (CustomerContextOverview's `transferHistoryContent`,
+   * lyra-ui) — see each page's own `customerContextOverview` call site for
+   * the branch that builds that card from this field. Never includes the
+   * current/active agent — this is specifically the history BEFORE it
+   * reached them.
+   */
+  transferHistory?: {
+    agentName: string;
+    agentInitials: string;
+    avatarClassName: string;
+    summary: string;
+    durationLabel: string;
+  }[];
 }
 
 /** Whether ANY currently-open channel on this Interaction is actually
@@ -576,7 +628,11 @@ export function buildNavItems(
   return [
     {
       icon: <Home className="h-4 w-4" strokeWidth={1.5} />,
-      label: "Home",
+      // Per explicit request ("change the word Home to Dashboard"): label
+      // text only — the icon (still a house glyph) and every behavior
+      // (`active`/`onClick`) are untouched, this rail item still resumes
+      // the same Home/Desk dashboard view it always did.
+      label: "Dashboard",
       active: !hasActiveInteraction && !showSettings,
       onClick: onDeskClick,
     },

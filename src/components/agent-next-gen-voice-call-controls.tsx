@@ -110,8 +110,13 @@ import {
   Slider,
   Spinner,
   Tooltip,
-  type ToastItem,
+  TabList,
+  Tab,
+  ListItem,
+  ActionIconButton,
+  Tag,
 } from "@nicecxone/lyra-ui";
+import { CREATE_NEW_AGENTS } from "@nicecxone/lyra-ui/agents-data";
 import {
   Pause,
   Play,
@@ -129,8 +134,18 @@ import {
   VolumeX,
   FileText,
   User,
+  Check,
+  X,
+  Phone,
+  MessageSquare,
+  Headset,
+  ChevronRight,
+  Users,
+  Split,
+  Merge,
 } from "lucide-react";
-import { formatElapsedTime } from "@/components/agent-next-gen-shared-utils";
+import { formatElapsedTime, initialsFor } from "@/components/agent-next-gen-shared-utils";
+import { TransferIcon } from "@/components/agent-next-gen-transcript";
 
 /** One column: icon on top, visible label underneath — the main control
  *  shape this bar now uses everywhere (see this file's own top doc comment
@@ -331,6 +346,509 @@ function DialPad() {
   );
 }
 
+/** A row `ConferencePicker` (just below) lists under any of its three tabs
+ *  — an avatar (initials over `CREATE_NEW_AGENTS`' own real per-agent
+ *  `avatarClassName`, or a flat neutral tint for a skill queue, which has
+ *  no such per-record color), a name, and a subtitle (an agent's real
+ *  `role`, or a fixed "Skill queue" label). Deliberately NOT the full
+ *  `CreateNewOutboundContact` shape `create-new.tsx`'s own Outbound picker
+ *  uses — this popover has no channel/phone/status logic to drive, just
+ *  "who am I looking at, who do I tap." */
+interface ConferencePickerPerson {
+  id: string;
+  name: string;
+  subtitle: string;
+  avatarClassName: string;
+}
+
+/** "Favorites" — per explicit request ("no real multi-party state"), this
+ *  isn't a real favorited-contacts list (there's nowhere in this app that
+ *  lets an agent actually favorite/unfavorite a colleague for THIS
+ *  picker specifically — `create-new.tsx`'s own Favorites group is a
+ *  separate, unrelated piece of state for the Outbound flow). Just the
+ *  first few real `CREATE_NEW_AGENTS` records, standing in for "people
+ *  this agent conferences in often" — same "real data, decorative
+ *  wiring" convention `EMAIL_FOCUS_*` (agent-next-gen-email-focus-card.tsx)
+ *  already follows for its own hand-picked mock content. */
+const CONFERENCE_FAVORITES: ConferencePickerPerson[] = CREATE_NEW_AGENTS.slice(0, 4).map((agent) => ({
+  id: agent.id,
+  name: agent.name,
+  subtitle: agent.role,
+  avatarClassName: agent.avatarClassName,
+}));
+/** "Agents" — a wider slice of the same real roster, per explicit request
+ *  ("same as the reference and our own 'Add Participant' icon"), not a
+ *  disjoint invented list. Capped at 8 (not all 100) — this is a small
+ *  popover, not `create-new.tsx`'s own full paginated Agents group. */
+const CONFERENCE_AGENTS: ConferencePickerPerson[] = CREATE_NEW_AGENTS.slice(0, 8).map((agent) => ({
+  id: agent.id,
+  name: agent.name,
+  subtitle: agent.role,
+  avatarClassName: agent.avatarClassName,
+}));
+/** "Skills" — hand-authored, matching the same skill-name vocabulary
+ *  already used elsewhere in this app (`EMAIL_FOCUS_*`'s own `skillName`
+ *  values, `ContactHistoryEntry.skillName`) rather than a third,
+ *  disconnected pool — a skill queue has no individual "agent" behind it
+ *  to add by name, so `subtitle` is just a fixed "Skill queue" label and
+ *  `avatarClassName` is one flat neutral tint for all of them (no
+ *  per-record color the way a real agent roster has). */
+const CONFERENCE_SKILLS: ConferencePickerPerson[] = [
+  "General Support",
+  "Billing",
+  "Technical Support",
+  "Sales",
+  "Escalations",
+].map((name) => ({
+  id: `skill-${name.toLowerCase().replace(/\s+/g, "-")}`,
+  name,
+  subtitle: "Skill queue",
+  avatarClassName: "bg-lyra-bg-surface-canvas text-lyra-fg-secondary",
+}));
+
+type ConferenceTabKey = "favorites" | "agents" | "skills";
+
+/** Conference's own popover body — Favorites/Agents/Skills tabs over a row
+ *  list built from the reference app's own `AgentRow`/`SkillRow`
+ *  (`ConsultTransferPopover.tsx`): a `ListItem static` (no whole-row click —
+ *  matches that reference exactly, right down to reusing its component)
+ *  with a leading avatar, name/subtitle, and a trailing cluster of real
+ *  `ActionIconButton`s — Call, Chat, Transfer — per a later explicit
+ *  follow-up request ("hover in the conference popup shows call or chat
+ *  icons, transfer icons ... match the stoker-agent-test conference popup
+ *  flow and behavior"). Skills rows drop Chat (no individual person to
+ *  message), same as `SkillRow`'s own Call/Transfer-only trailing cluster.
+ *  Only Call does anything real here — it's this popover's one actual job
+ *  (`onSelect`, starting the consult-then-merge flow below) — Chat/Transfer
+ *  are decorative toasts, matching this app's own standing "not wired up
+ *  yet" convention for every other not-yet-real action (including this
+ *  app's OWN existing Transfer buttons elsewhere, agent-next-gen-
+ *  transcript.tsx/channel-row.tsx) rather than inventing real behavior for
+ *  either one here. `overflowMenu` on `TabList` per this repo's own
+ *  standing rule (CONTRIBUTING.md — every `TabList` gets it, no
+ *  exceptions) — `w-[440px]` (was `w-72`/288px, briefly `w-96`/384px) per
+ *  an earlier explicit follow-up request ("make the conference popup wide
+ *  enough to show all three tabs") is what actually keeps it from needing
+ *  that overflow behavior in practice. `TabList`'s "N More" collapse isn't
+ *  a content-fit measurement at all — it's a flat `wrapRef` width ≤400px
+ *  check (`tabs.tsx`'s own `TAB_LIST_COMPACT_COLLAPSE_WIDTH`/`isNarrow`),
+ *  so `w-96` (384px) still collapsed despite comfortably fitting all three
+ *  labels — it was simply under the 400px line, full stop. `w-[440px]`
+ *  matches the reference app's own identical fix for its Conference
+ *  popover once ITS tab count changed (`LiveVoiceCallBar.tsx`'s
+ *  `popoverClassName="z-[9999] w-[440px]"` — "wider than the default
+ *  360px... that row still doesn't fit the default width"), not a value
+ *  picked fresh here. */
+function ConferencePicker({
+  onSelect,
+}: {
+  onSelect: (person: ConferencePickerPerson) => void;
+}) {
+  const [tab, setTab] = useState<ConferenceTabKey>("favorites");
+  const isSkillsTab = tab === "skills";
+  const people =
+    tab === "favorites" ? CONFERENCE_FAVORITES : tab === "agents" ? CONFERENCE_AGENTS : CONFERENCE_SKILLS;
+  return (
+    <div className="flex flex-col w-[440px]">
+      <TabList overflowMenu className="px-2 pt-2">
+        <Tab active={tab === "favorites"} onClick={() => setTab("favorites")}>Favorites</Tab>
+        <Tab active={tab === "agents"} onClick={() => setTab("agents")}>Agents</Tab>
+        <Tab active={tab === "skills"} onClick={() => setTab("skills")}>Skills</Tab>
+      </TabList>
+      {/* Dial Pad — per explicit request/reference screenshot: its own
+          full-width row directly under the tabs, outside the scrollable
+          Favorites/Agents/Skills list below (so it never scrolls away) and
+          separated from it by `ListItem`'s own bottom divider (`divider`
+          left at its default `true` here — every row inside the list below
+          explicitly passes `divider={false}` instead, since those read as
+          one continuous block). No `onClick` at all (was a "not wired up
+          yet" toast) — per explicit follow-up request ("remove all of the
+          notifications that trigger upon any action"), this and every
+          other decorative control in this bar now renders with no toast
+          AND no fake handler standing in for one; there's no real "dial an
+          arbitrary number to consult" flow in this prototype yet, and
+          nothing here pretends otherwise anymore either. */}
+      <ListItem
+        leading={<Grid3x3 className="h-5 w-5 text-lyra-fg-secondary" strokeWidth={1.5} aria-hidden="true" />}
+        title="Dial Pad"
+        trailing={<ChevronRight className="h-4 w-4 text-lyra-fg-secondary" strokeWidth={1.5} aria-hidden="true" />}
+      />
+      <div className="flex flex-col max-h-64 overflow-y-auto py-1">
+        {people.map((person) => (
+          <ListItem
+            key={person.id}
+            static
+            divider={false}
+            className="px-3 py-2"
+            leading={
+              <div
+                className={cn(
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-full lyra-body-sm-emphasis",
+                  person.avatarClassName
+                )}
+                aria-hidden="true"
+              >
+                {initialsFor(person.name)}
+              </div>
+            }
+            title={person.name}
+            subtitle={person.subtitle}
+            trailing={
+              <div className="flex items-center gap-0.5">
+                <ActionIconButton size="sm" title={`Consult with ${person.name}`} onClick={() => onSelect(person)}>
+                  <Phone className="h-4 w-4" strokeWidth={1.5} />
+                </ActionIconButton>
+                {!isSkillsTab && (
+                  <ActionIconButton size="sm" title={`Chat with ${person.name}`}>
+                    <MessageSquare className="h-4 w-4" strokeWidth={1.5} />
+                  </ActionIconButton>
+                )}
+                <ActionIconButton size="sm" title={`Transfer to ${person.name}`}>
+                  <TransferIcon />
+                </ActionIconButton>
+              </div>
+            }
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** A colleague actually merged into this call — ported from the reference
+ *  app's identical `CallColleague` (`LiveVoiceCallBar.tsx`), narrowed to
+ *  just `id`/`name`: this bar has no real per-participant hold/transfer
+ *  (still one shared Hold button for the whole call — see this file's own
+ *  top doc comment on why every control here stays decorative/whole-call),
+ *  so `isOnHold`/`sourceSkillName`/`isCustomer` weren't ported — nothing
+ *  here would ever read them. */
+export interface CallColleague {
+  id: string;
+  name: string;
+  /** Row-level hold for JUST this one colleague — ported from the
+   *  reference's identical `CallColleague.isOnHold`/`onToggleColleagueHold`.
+   *  Independent of the primary customer's own hold (`onHold`/`setOnHold`
+   *  below) and of every OTHER colleague's — each participant pill in the
+   *  strip (`ParticipantChip`, below) holds/resumes only the one person it
+   *  represents. The bar's own main Hold button still holds/resumes
+   *  EVERYONE at once (see `handleHoldClick` below) — same "one bulk
+   *  action, plus independent per-person overrides afterward" relationship
+   *  the reference's `toggleVoiceCallHold`/`togglePrimaryOnlyHold`/
+   *  `toggleVoiceCallColleagueHold` establish. */
+  isOnHold: boolean;
+}
+
+/** A private, pre-merge consult in progress — ported from the reference
+ *  app's identical `VoiceCallConsult`. `undefined` means "not consulting
+ *  right now," same convention. Narrowed the same way `CallColleague` is
+ *  above (no `sourceSkillName`/`isCustomer`/`mergeFromAssignmentId` — this
+ *  bar has no skill-routed-to-a-specific-agent distinction, no customer
+ *  tab in `ConferencePicker`, and no separate "Active Calls" merge source;
+ *  every consult here starts the same way, from the same three tabs). */
+interface VoiceCallConsult {
+  id: string;
+  name: string;
+  /** Whether the CONSULT leg itself (not the primary customer) is
+   *  currently the one on hold — per explicit follow-up request ("when
+   *  consulting with another person need to provide a way to swap and hold
+   *  between the consult and the customer"). Always `false` the moment a
+   *  consult starts (the consult is "live"/being talked to; the customer
+   *  is the one auto-held — see `ConferencePicker`'s own `onSelect`), and
+   *  flips in lockstep with the customer's own `onHold` every time either
+   *  party's Hold button is pressed (`handleSwapConsult`) — exactly one of
+   *  the two is ever held at a time during a consult, never both/neither
+   *  (this is what a design critique flagged as "either consult or live
+   *  voice call can be active at once, so one or the other automatically
+   *  goes on hold... if it's not merged yet" — once merged, each colleague
+   *  instead holds independently, see `CallColleague.isOnHold`'s own doc
+   *  comment). */
+  isOnHold: boolean;
+}
+
+/** One of the two toggleable parties shown in `ConsultBanner` (the primary
+ *  customer or the consult target) — per explicit follow-up request ("dim
+ *  the held participant's avatar in swap. Make the swap icon simply a
+ *  hold icon button"), replacing the single combined "Swap" control with
+ *  one hold/resume button PER party, each showing that party's own current
+ *  state directly (dimmed avatar + red Resume icon when held) instead of
+ *  making the agent read a sentence to find out who's live. Reuses
+ *  `ParticipantChip`'s own exact hold-button styling (icon size/color,
+ *  Play/Pause swap) for visual consistency with the post-merge roster —
+ *  this is the same action, just before a colleague officially exists yet. */
+function ConsultBannerParty({
+  label,
+  onHold,
+  onToggleHold,
+}: {
+  label: string;
+  onHold: boolean;
+  onToggleHold: () => void;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <span
+        className={cn(
+          "flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-lyra-bg-surface-container-subtle lyra-body-xs-emphasis text-lyra-fg-secondary transition-opacity",
+          onHold && "opacity-40"
+        )}
+        aria-hidden="true"
+      >
+        {initialsFor(label)}
+      </span>
+      <span className={cn("lyra-body-sm truncate", onHold ? "text-lyra-fg-secondary" : "text-lyra-fg-default")}>
+        {label}
+      </span>
+      <button
+        type="button"
+        title={onHold ? `Resume ${label}` : `Hold ${label}`}
+        aria-label={onHold ? `Resume ${label}` : `Hold ${label}`}
+        onClick={onToggleHold}
+        className={cn(
+          "flex h-6 w-6 shrink-0 items-center justify-center rounded-full hover:bg-lyra-state-hover",
+          onHold ? "text-lyra-status-critical-strong" : "text-lyra-fg-secondary"
+        )}
+      >
+        {onHold ? <Play className="h-3.5 w-3.5" strokeWidth={2} /> : <Pause className="h-3.5 w-3.5" strokeWidth={2} />}
+      </button>
+    </div>
+  );
+}
+
+/** Shown in place of this bar's normal content while a consult is in
+ *  progress — ported from the reference app's identical `ConsultBanner`,
+ *  then extended per explicit follow-up request ("provide a way to swap
+ *  and hold between the consult and the customer"), then revised once
+ *  more per a design critique + explicit follow-up ("dim the held
+ *  participant's avatar in swap. Make the swap icon simply a hold icon
+ *  button"): no more single combined "Swap" control or descriptive
+ *  sentence to read — both parties render side by side via
+ *  `ConsultBannerParty`, each with its own hold/resume button and its own
+ *  dimmed-when-held avatar, so which leg is currently live is a GLANCE,
+ *  not a read. Both buttons call the exact same `onToggleHold` — pressing
+ *  either one is the identical action (there are only ever two states
+ *  while not yet merged — see `VoiceCallConsult.isOnHold`'s own doc
+ *  comment), so there's no need for two separate handlers. */
+function ConsultBanner({
+  customerLabel,
+  customerOnHold,
+  consultName,
+  consultOnHold,
+  onToggleHold,
+  onCancel,
+  onMerge,
+}: {
+  customerLabel: string;
+  customerOnHold: boolean;
+  consultName: string;
+  /** See `VoiceCallConsult.isOnHold`'s own doc comment. */
+  consultOnHold: boolean;
+  onToggleHold: () => void;
+  onCancel: () => void;
+  onMerge: () => void;
+}) {
+  return (
+    <div className="mb-2 flex items-center gap-3 rounded-lyra-md border border-lyra-border-subtle bg-lyra-bg-surface-base px-3 py-2">
+      <ConsultBannerParty label={customerLabel} onHold={customerOnHold} onToggleHold={onToggleHold} />
+      <span aria-hidden="true" className="h-4 w-px shrink-0 bg-lyra-border-subtle" />
+      <ConsultBannerParty label={consultName} onHold={consultOnHold} onToggleHold={onToggleHold} />
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <Button variant="outline" size="sm" onClick={onCancel}>Cancel consult</Button>
+        <Button variant="default" size="sm" onClick={onMerge}>Merge call</Button>
+      </div>
+    </div>
+  );
+}
+
+/** One merged colleague's pill in the participant strip (rendered once
+ *  `colleagues.length > 0`) — ported from the reference app's
+ *  `ParticipantChip`, narrowed to just the one action this bar actually
+ *  supports per colleague: drop them from the call (no per-participant
+ *  hold/transfer — see `CallColleague`'s own doc comment above for why).
+ *  Same inline "Drop {name}?" Check/X confirm step the reference uses
+ *  (`confirming` below) rather than dropping on a single click, and the
+ *  same "stays armed until explicitly confirmed or cancelled" behavior —
+ *  nothing else (moving the pointer away) dismisses it, so a stray brush
+ *  of the mouse can't silently discard a drop the agent didn't mean to
+ *  make yet. */
+/** One pill in the participant strip — ported from the reference app's
+ *  identical `ParticipantChip` (`LiveVoiceCallBar.tsx`), same three-way
+ *  reuse: "You" gets none of the three optional actions below (an agent
+ *  can't hold, transfer, or hang up on themselves), the primary customer
+ *  gets `onToggleHold` only (ending their leg is the bar's own main Hang
+ *  Up button's job, transferring/dropping THEM isn't a real concept — the
+ *  whole call just ends), and a colleague gets all three. Every action
+ *  here is always visible when its handler is passed (no hover-to-reveal —
+ *  matches the reference's own later-explicit-follow-up final state, not
+ *  its earlier hover/click-to-pin version). `isInternalAgent` swaps the
+ *  avatar from initials to a headset glyph — every colleague this bar can
+ *  ever produce comes from `ConferencePicker`'s Favorites/Agents/Skills
+ *  tabs (never a real customer merged in — this app's picker has no
+ *  Customers tab the way the reference's does), so every colleague pill
+ *  passes this `true`; only the primary customer pill (never "internal")
+ *  shows real initials. */
+function ParticipantChip({
+  label,
+  isSelf,
+  isInternalAgent,
+  isOnHold,
+  onToggleHold,
+  onTransfer,
+  onHangUp,
+  onSelect,
+  selected,
+  kind,
+}: {
+  label: string;
+  isSelf?: boolean;
+  isInternalAgent?: boolean;
+  isOnHold?: boolean;
+  /** Presence alone gates the Hold/Resume icon — omitted for "You". */
+  onToggleHold?: () => void;
+  /** Presence alone gates the Transfer icon — only ever passed for a
+   *  colleague. Decorative (see this file's own "not wired up yet"
+   *  convention) rather than a real hand-off, same as every other Transfer
+   *  control in this app. */
+  onTransfer?: () => void;
+  /** Presence alone gates the Hang Up (drop) icon — only ever passed for a
+   *  colleague. Routed through the same inline "Drop {name}?" Check/X
+   *  confirm this pill already had before gaining Hold/Transfer. */
+  onHangUp?: () => void;
+  /** Makes the avatar+label area itself clickable — used only by a merged-
+   *  call roster pill (`VoiceCallControls`'s own `mergedInteractions`
+   *  rendering) to switch which bridged customer is focused
+   *  (`switchActiveInteraction` at the call site). Omitted everywhere else
+   *  — a plain colleague/"You" pill isn't a separate, selectable record. */
+  onSelect?: () => void;
+  /** Highlights this pill as the currently-focused merged customer. Only
+   *  meaningful alongside `onSelect`. */
+  selected?: boolean;
+  /** Which roster group this pill belongs to — tints the avatar bubble so
+   *  a "Conference" colleague and a "Merge Calls" bridged customer read as
+   *  two different kinds of thing at a glance, now that both can appear in
+   *  the SAME consolidated strip (see the roster strip's own doc comment
+   *  below for why they were merged into one). "colleague" reuses the
+   *  same blue the "Conference" `Tag` already uses in the control row
+   *  above; "merged" reuses the teal the new "Merged call" `Tag` uses —
+   *  each pill's color matches its own badge's color, not the other
+   *  group's. Omitted (plain neutral avatar) for "You"/the primary
+   *  customer, which aren't part of either group. */
+  kind?: "colleague" | "merged";
+}) {
+  const canExpand = !!onToggleHold || !!onTransfer || !!onHangUp;
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <span
+      className={cn(
+        "flex h-8 shrink-0 items-center gap-2 rounded-full bg-lyra-bg-surface-base pl-1 pr-2.5",
+        selected && "bg-lyra-status-info-subtle"
+      )}
+    >
+      <span
+        className={cn(
+          "flex h-6 w-6 shrink-0 items-center justify-center rounded-full lyra-body-xs-emphasis",
+          kind === "colleague"
+            ? "bg-lyra-status-info-subtle text-lyra-status-info-strong"
+            : kind === "merged"
+              ? "bg-lyra-accent-teal-soft text-lyra-accent-teal-strong"
+              : "bg-lyra-bg-surface-container-subtle text-lyra-fg-secondary",
+          onSelect && "cursor-pointer"
+        )}
+        aria-hidden="true"
+        {...(onSelect ? { onClick: onSelect } : {})}
+      >
+        {isSelf ? "You" : isInternalAgent ? <Headset className="h-3 w-3" strokeWidth={1.5} /> : initialsFor(label)}
+      </span>
+      {!isSelf &&
+        (onSelect ? (
+          <button
+            type="button"
+            onClick={onSelect}
+            aria-pressed={selected}
+            className="lyra-body-sm text-lyra-fg-default max-w-[130px] truncate text-left hover:underline"
+          >
+            {label}
+          </button>
+        ) : (
+          <span className="lyra-body-sm text-lyra-fg-default max-w-[130px] truncate">{label}</span>
+        ))}
+      {canExpand &&
+        (confirming ? (
+          <span className="flex shrink-0 items-center gap-1">
+            <span className="lyra-body-xs text-lyra-fg-secondary whitespace-nowrap">Drop?</span>
+            <button
+              type="button"
+              aria-label={`Confirm drop ${label}`}
+              onClick={() => {
+                onHangUp?.();
+                setConfirming(false);
+              }}
+              className="flex h-6 w-6 items-center justify-center rounded-full text-lyra-status-critical-strong hover:bg-lyra-state-hover"
+            >
+              <Check className="h-3.5 w-3.5" strokeWidth={2} />
+            </button>
+            <button
+              type="button"
+              aria-label="Cancel"
+              onClick={() => setConfirming(false)}
+              className="flex h-6 w-6 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
+            >
+              <X className="h-3.5 w-3.5" strokeWidth={2} />
+            </button>
+          </span>
+        ) : (
+          <span className="flex shrink-0 items-center gap-1">
+            {onToggleHold && (
+              <button
+                type="button"
+                title={isOnHold ? `Resume ${label}` : `Hold ${label}`}
+                aria-label={isOnHold ? `Resume ${label}` : `Hold ${label}`}
+                onClick={onToggleHold}
+                className={cn(
+                  "flex h-6 w-6 items-center justify-center rounded-full hover:bg-lyra-state-hover",
+                  isOnHold ? "text-lyra-status-critical-strong" : "text-lyra-fg-secondary"
+                )}
+              >
+                {isOnHold ? <Play className="h-3.5 w-3.5" strokeWidth={2} /> : <Pause className="h-3.5 w-3.5" strokeWidth={2} />}
+              </button>
+            )}
+            {onTransfer && (
+              <button
+                type="button"
+                title={`Transfer call to ${label}`}
+                aria-label={`Transfer call to ${label}`}
+                onClick={onTransfer}
+                className="flex h-6 w-6 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
+              >
+                {/* `TransferIcon` — per explicit follow-up request ("change
+                    this icon to the transfer/consult icon used
+                    elsewhere"): same composite this app's record-header
+                    "Consult / Transfer" button and `ConferencePicker`'s own
+                    row-level Transfer action already use, instead of a
+                    bare `ArrowRightLeft` glyph unique to this one spot.
+                    Fixed-size (no `className` override — see that
+                    component's own definition), but reads fine at this
+                    button's 24px size, same as every other place it's
+                    already used inside a similarly compact trigger. */}
+                <TransferIcon />
+              </button>
+            )}
+            {onHangUp && (
+              <button
+                type="button"
+                title={`Drop ${label}`}
+                aria-label={`Drop ${label}`}
+                onClick={() => setConfirming(true)}
+                className="flex h-6 w-6 items-center justify-center rounded-full text-lyra-status-critical-strong hover:bg-lyra-state-hover"
+              >
+                <PhoneOff className="h-3.5 w-3.5" strokeWidth={2} />
+              </button>
+            )}
+          </span>
+        ))}
+    </span>
+  );
+}
+
 /** The collapsed volume trigger — compact rendering only (see this file's
  *  own top doc comment for why the wide rendering keeps its own separate
  *  icon instead). A single icon button (the live volume glyph, same
@@ -469,11 +987,6 @@ export interface VoiceCallControlsProps {
    *  an existing caller that hasn't wired this through yet still renders
    *  (just without the timer) instead of crashing. */
   elapsedSeconds?: number;
-  /** Same shared toast surface every other mock/placeholder control in
-   *  this app already fires through (`agent-next-gen-customer-info-
-   *  panel.tsx`'s own `onAddToast`, etc.) — omit to silently no-op instead
-   *  of throwing on a caller that hasn't wired toasts through yet. */
-  onAddToast?: (toast: Omit<ToastItem, "id">) => void;
   /**
    * Opens/closes the call transcript `InteriorPanel` the caller renders
    * alongside the transcript/composer column (see each tier page's own
@@ -526,6 +1039,65 @@ export interface VoiceCallControlsProps {
    *  provided — omit to leave this button exactly as before (a purely
    *  local, decorative toggle with no effect outside this component). */
   onHoldChange?: (onHold: boolean) => void;
+  /** Same optionally-controlled pattern as `onHold`/`onHoldChange` above,
+   *  for the Consult popover's own open/closed state — lets a caller open
+   *  this bar's Consult picker from somewhere else entirely (e.g. the
+   *  record header's own "Consult / Transfer" button,
+   *  agent-next-gen-transcript.tsx, per explicit follow-up request) instead
+   *  of only from this bar's own Consult button. Ignored (falls back to
+   *  local state) while `onConferenceOpenChange` is omitted. */
+  conferenceOpen?: boolean;
+  /** Fired with the NEW open state whenever the Consult popover opens or
+   *  closes (its own button, Escape, an outside click, or a completed
+   *  selection). Only takes effect (makes `conferenceOpen` above
+   *  controlled) when provided — omit to leave this exactly as before (a
+   *  purely local popover with no effect outside this component). */
+  onConferenceOpenChange?: (open: boolean) => void;
+  /** Repositions the Consult popover onto an arbitrary DOM node instead of
+   *  this bar's own Consult button — e.g. the record header's own
+   *  "Consult / Transfer" button, living somewhere else on the page
+   *  entirely — per explicit request ("show the consult popup next to
+   *  that selection, so a user doesn't have to jump away from where they
+   *  just clicked"). Same `Popover` `virtualAnchorRef` escape hatch the
+   *  "Merge Calls" picker already uses (AgentWorkspace2WithDeskPage.tsx) —
+   *  the caller sets `.current` to the clicked element right before
+   *  opening, and clears it back to `null` on close so this bar's own
+   *  button becomes the anchor again by default. Omit to leave the
+   *  popover always anchored to this bar's own button, exactly as before. */
+  consultAnchorRef?: React.RefObject<HTMLElement | null>;
+  /** One-way notification (NOT a controlled value the way `onHold`/
+   *  `onConferenceOpenChange` are — nothing outside this bar ever needs to
+   *  SET the roster, only read it) of the current merged-colleague roster,
+   *  fired whenever a merge or a drop changes it — per explicit follow-up
+   *  request ("show all participant names in the assignment card also with
+   *  a similar 'conference' icon"): the left-nav assignment card needs this
+   *  same list (to list every participant's name and show a conference
+   *  icon) from a completely different part of the component tree, same
+   *  "lift it so another surface can read it" reasoning `onHold` already
+   *  established. Only `id`/`name` — see `Thread.colleagues`'s own doc
+   *  comment (agent-next-gen-interaction-dashboard.tsx) for why that's
+   *  deliberately narrower than this bar's own internal `CallColleague`
+   *  (per-colleague hold state stays purely internal, irrelevant to the
+   *  nav card). Omit to just skip the notification — this bar's own
+   *  roster/participant strip behave identically either way. */
+  onColleaguesChange?: (colleagues: { id: string; name: string }[]) => void;
+  /** The PERSISTED roster to seed this bar's own local `colleagues` state
+   *  from, on mount — the exact same `Thread.colleagues` value
+   *  `onColleaguesChange` writes out to (see each page's own
+   *  `<VoiceCallControls>` call site: both read from and write to that one
+   *  field). Only read once, as `useState`'s own lazy initializer — this
+   *  bar still owns the roster locally after that (per-colleague hold
+   *  state, drop confirmations, etc. all stay internal, same as before);
+   *  this prop exists purely so a REMOUNT (this bar's own `key` changes
+   *  whenever the underlying call it's showing changes — see that prop's
+   *  own doc comment) seeds back the right starting roster instead of
+   *  always defaulting to empty. Without this, switching which bridged
+   *  customer is displayed (a Merge Calls roster click) silently erased
+   *  the OTHER customer's own conference the instant this bar remounted
+   *  for them — see `colleagues`' own state doc comment below for the full
+   *  bug writeup. Omit to keep the original always-starts-empty behavior
+   *  (a caller with no conference concept at all). */
+  initialColleagues?: { id: string; name: string }[];
   /** Per explicit request (Agent Workspace 2.0 Phase 1 only): hides the
    *  "Add video" button entirely. This bar's own divider just before it
    *  stays either way — it still separates the call-feature cluster from
@@ -566,23 +1138,66 @@ export interface VoiceCallControlsProps {
    *  screenshot's unmatched-quickdial-number case (see this file's own top
    *  doc comment). */
   customerInitials?: string;
+  /** Every OTHER Interaction currently bridged with this call via "Merge
+   *  Calls" (resolved by the caller from `Interaction.mergedInteractionIds`
+   *  — see that field's own doc comment, agent-next-gen-interaction-
+   *  dashboard.tsx). Distinct from `colleagues`/`onColleaguesChange` above:
+   *  a merged interaction is a fully separate, independently-dialed
+   *  customer call, not an internal agent merged into this one. Presence
+   *  (`length > 0`) alone gates the merged-call roster strip and disables
+   *  Hold (see `onUnmergeCalls`'s own doc comment for why). */
+  mergedInteractions?: {
+    id: string;
+    name: string;
+    /** Per explicit request ("if merging an agent or skill into a
+     *  customer call ... there is no selecting of the agent line"):
+     *  `false` renders this row's name as plain, non-clickable text (no
+     *  `onSelect` wired, same as an in-call Consult/Merge colleague's own
+     *  name) instead of a focus-switching button. Default `true` — every
+     *  existing customer-customer merge is unaffected. */
+    selectable?: boolean;
+  }[];
+  /** Fired when the agent clicks a merged customer's name (in this bar's
+   *  own roster strip) — the caller's own `switchActiveInteraction`, so
+   *  clicking a name re-focuses the whole page (transcript, record header,
+   *  Customer Info panel) onto that interaction. This bar has no notion of
+   *  "which interaction is active" itself. */
+  onSelectMergedInteraction?: (interactionId: string) => void;
+  /** Splits every interaction in this merged call back into fully
+   *  independent calls (clears `mergedInteractionIds` on all of them).
+   *  Presence alone shows the Un-merge button in the roster strip. */
+  onUnmergeCalls?: () => void;
+  /** Ends every interaction's voice call in this merged group at once
+   *  (sets `voiceCallEnded` on all of them). Presence alone shows the End
+   *  All Calls button in the roster strip — gated behind its own inline
+   *  confirm, same pattern as `ParticipantChip`'s "Drop {name}?" step,
+   *  since this ends more than just the call currently in view. */
+  onEndAllCalls?: () => void;
   className?: string;
 }
 
 export function VoiceCallControls({
   onHangUp,
   elapsedSeconds,
-  onAddToast,
   onToggleTranscript,
   transcriptOpen,
   onToggleVideo,
   videoOpen,
   onHold: onHoldControlled,
   onHoldChange,
+  conferenceOpen: conferenceOpenControlled,
+  onConferenceOpenChange,
+  consultAnchorRef,
+  onColleaguesChange,
+  initialColleagues,
   showAddVideo = true,
   stretch = false,
   customerLabel,
   customerInitials,
+  mergedInteractions,
+  onSelectMergedInteraction,
+  onUnmergeCalls,
+  onEndAllCalls,
   className,
 }: VoiceCallControlsProps) {
   // Decorative-only fallback for a caller that hasn't wired `onHoldChange`
@@ -599,6 +1214,67 @@ export function VoiceCallControls({
   const [localVideoAdded, setLocalVideoAdded] = useState(false);
   const videoAdded = onToggleVideo ? !!videoOpen : localVideoAdded;
   const [keypadOpen, setKeypadOpen] = useState(false);
+  // Optionally controlled — see `onHold`'s own identical split just above
+  // for the pattern. Lifted per explicit follow-up request ("the
+  // consult/transfer icon in the top right will trigger the same popup as
+  // the 'conference' icon button does now"): the record header's own
+  // "Consult / Transfer" button (agent-next-gen-transcript.tsx) lives in a
+  // completely different part of the component tree than this bar, so the
+  // two can only open the exact same popover if whichever page renders
+  // both lifts this one boolean to a shared piece of state and passes it
+  // to both — a caller that doesn't wire `onConferenceOpenChange` through
+  // still gets the original fully-local behavior for free.
+  const [localConferenceOpen, setLocalConferenceOpen] = useState(false);
+  const conferenceOpen = onConferenceOpenChange ? !!conferenceOpenControlled : localConferenceOpen;
+  const setConferenceOpen = onConferenceOpenChange ?? setLocalConferenceOpen;
+  // The real consult-then-merge conference flow — ported from the
+  // reference app's identical `voiceCallColleagues`/`voiceCallConsult`
+  // (AgentNextGenPage.tsx), just kept local to this component instead of
+  // lifted to a page-level `Record<assignmentId, ...>`.
+  //
+  // CORRECTED per an explicit bug report ("when I merged another customer
+  // into an existing conference, the conference call seemed to end, and
+  // kicked out the conferencing agent"): this used to assume plain local
+  // state was enough because "this app only ever has one live voice call
+  // at a time, so this bar is never remounted per interaction" — true when
+  // this was written, FALSE since "Merge Calls" shipped. This bar's own
+  // `key` (the page call sites below) is deliberately
+  // `${displayedVoiceCallInteraction.id}:${displayedVoiceCallThread.id}`,
+  // and switching which bridged member is "displayed" (clicking a merged
+  // customer's name, `onSelectMergedInteraction`) changes that key — a
+  // real, intentional remount (same one that correctly gives a genuinely
+  // DIFFERENT call its own fresh mute/hold/consult state). The bug: local
+  // `useState([])` defaulted to empty on every one of those remounts
+  // too, and the sync effect just below (`onColleaguesChange`) fires on
+  // MOUNT as well as on every change — so the instant an agent switched
+  // which bridged customer they were viewing, this bar wiped that OTHER
+  // customer's real, persisted colleague roster back to `[]` before ever
+  // learning what it actually was. Confirmed live: start a conference on
+  // Call A (Consult + Merge a colleague), bridge in Call B (Merge Calls),
+  // switch focus to A's own name in the merged roster — the colleague was
+  // gone. `initialColleagues` (prop, below) is the fix: the SAME
+  // `Thread.colleagues` field `onColleaguesChange` already writes out to,
+  // now also read back in as this state's OWN seed on (re)mount — the
+  // exact two-way pattern `onHold`/`heldByAgent` on this same bar already
+  // established; `colleagues` was the one field that had only ever been
+  // wired as write-only.
+  const [colleagues, setColleagues] = useState<CallColleague[]>(
+    () => initialColleagues?.map((c) => ({ id: c.id, name: c.name, isOnHold: false })) ?? []
+  );
+  // Notifies the caller every time the roster's actual MEMBERSHIP changes
+  // (a merge or a drop) — see `onColleaguesChange`'s own doc comment.
+  // Deliberately keyed on `colleagues` itself, not called inline inside
+  // `handleMergeConsult`/`handleDropColleague`, so this fires correctly
+  // regardless of which of those (or any future one) changed the array,
+  // without each having to separately compute/pass the resulting list.
+  // `onColleaguesChange` itself isn't in the dep array — a caller that
+  // doesn't memoize it shouldn't re-fire this on every one of its own
+  // unrelated re-renders.
+  useEffect(() => {
+    onColleaguesChange?.(colleagues.map((c) => ({ id: c.id, name: c.name })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [colleagues]);
+  const [consult, setConsult] = useState<VoiceCallConsult | undefined>(undefined);
   // Volume slider — purely local/decorative, same "no real telephony
   // backing this" convention as Hold/Mute/Mask/Record (see this file's own
   // top doc comment).
@@ -708,6 +1384,17 @@ export function VoiceCallControls({
   const CONTROLS_COMPACT_BREAKPOINT = 991;
   const CONTROLS_ICON_ONLY_BREAKPOINT = 768;
   const cardRef = useRef<HTMLDivElement>(null);
+  // This bar's own Consult button, self-ref'd so ITS OWN click can
+  // explicitly set `consultAnchorRef` to itself before opening — see that
+  // button's own `onClick` below for why this turned out to be necessary
+  // (relying on `consultAnchorRef.current` reverting to `null`/`children`
+  // on close did not reliably re-anchor the popover back here on the next
+  // open, confirmed live: the popover kept reopening at the LAST external
+  // anchor's position even after the ref was correctly nulled out on
+  // close). Always setting a real, explicit anchor on every open — never
+  // leaning on the null-means-fall-back-to-children path at all — sidesteps
+  // whatever that bug is.
+  const consultButtonSelfRef = useRef<HTMLButtonElement>(null);
   const [controlsCompact, setControlsCompact] = useState(false);
   const [controlsIconOnly, setControlsIconOnly] = useState(false);
   useEffect(() => {
@@ -729,26 +1416,110 @@ export function VoiceCallControls({
     const raf = requestAnimationFrame(() => setCollapseHeight(0));
     return () => cancelAnimationFrame(raf);
   }, [isExiting]);
+  // Cancel — ported from the reference app's `startVoiceCallConsult`'s
+  // cancel path: the private side-conversation is abandoned, and the
+  // primary customer (auto-held the instant the consult started) resumes.
+  // Leaves `colleagues` untouched — cancelling a NEW consult never affects
+  // anyone already merged in from an earlier one.
+  const handleCancelConsult = () => {
+    setConsult(undefined);
+    setOnHold(false);
+  };
+  // Swap — per explicit follow-up request ("provide a way to swap and
+  // hold between the consult and the customer"): flips exactly which of
+  // the two legs is live vs. held, in lockstep — captures the CURRENT
+  // `onHold` value before either update lands, since the new consult-hold
+  // state is simply the old customer-hold state (and vice versa). Only
+  // meaningful while a consult is in progress; the only two things that
+  // call this are the customer's and the consult's own Hold buttons in
+  // `ConsultBanner` (both wired to this SAME function — see that
+  // component's own doc comment for why pressing either one is identical).
+  const handleSwapConsult = () => {
+    if (!consult) return;
+    setOnHold(!onHold);
+    setConsult({ ...consult, isOnHold: onHold });
+  };
+  // Merge — ported from the reference app's `mergeVoiceCallConsult`: the
+  // consult becomes a real `CallColleague` and the primary customer resumes
+  // into what's now a three-(or-more-)way conference.
+  const handleMergeConsult = () => {
+    if (!consult) return;
+    setColleagues((prev) => [...prev, { id: consult.id, name: consult.name, isOnHold: false }]);
+    setConsult(undefined);
+    setOnHold(false);
+  };
+  // Drop — ported from the reference app's `dropVoiceCallColleague`. Only
+  // ever fired from `ParticipantChip`'s own Check/X confirm step, never
+  // directly on a single click (see that component's own doc comment) —
+  // this function itself doesn't need its own confirmation.
+  const handleDropColleague = (colleagueId: string) => {
+    setColleagues((prev) => prev.filter((c) => c.id !== colleagueId));
+  };
+  // Row-level hold for one specific colleague — ported from the reference
+  // app's `toggleVoiceCallColleagueHold`. Independent of the primary
+  // customer's own hold (`onHold`/`setOnHold`) and of every OTHER
+  // colleague's — see `CallColleague.isOnHold`'s own doc comment.
+  const handleToggleColleagueHold = (colleagueId: string) => {
+    setColleagues((prev) => prev.map((c) => (c.id === colleagueId ? { ...c, isOnHold: !c.isOnHold } : c)));
+  };
+  // Decorative no-op — per explicit follow-up request ("remove all of the
+  // notifications that trigger upon any action"), this used to just fire
+  // a "not wired up yet" toast; there's no real transfer flow in this
+  // prototype to do instead, so clicking Transfer on a merged colleague
+  // now genuinely does nothing, same as `ConferencePicker`'s own
+  // Chat/Transfer icons above. Kept as its own named handler (not inlined
+  // at the `ParticipantChip` call site) so the control stays wired/visibly
+  // present rather than silently dropped.
+  const handleTransferColleague = () => {};
+  // Per explicit follow-up ("look at end all icon for a merged call and the
+  // end call button from the original voice controls. They seem to be
+  // redundant in this scenario"): this bar's own roster strip used to carry
+  // a SECOND "end" control (a small icon + inline confirm, "End all calls")
+  // whenever a Merge Calls bridge was active — redundant with this button,
+  // which was always visible too, just with narrower (single-call) scope.
+  // That second control is gone now (see the roster strip's own comment);
+  // this ONE button picks the right scope itself instead — `onEndAllCalls`
+  // (ends every bridged member at once) when `mergedInteractions` is
+  // non-empty, the original single-call `onHangUp` otherwise. Falls back to
+  // `onHangUp` if a caller wires `mergedInteractions` without also wiring
+  // `onEndAllCalls` — same "missing handler, don't crash" convention every
+  // other optional callback here already follows.
   const handleHangUp = () => {
     // Guards against a double-fire (e.g. a stray extra click before the
-    // button's own `disabled` re-renders) from scheduling `onHangUp` twice.
+    // button's own `disabled` re-renders) from scheduling the end callback
+    // twice.
     if (isEnding) return;
     setIsEnding(true);
-    // Force-close the Keypad popover too — same "don't leave a conflicting
-    // open state showing" reasoning `CompactVolumeButton`'s own `disabled`
-    // prop doc comment gives for the volume popover.
+    // Force-close the Keypad/Conference popovers too — same "don't leave a
+    // conflicting open state showing" reasoning `CompactVolumeButton`'s own
+    // `disabled` prop doc comment gives for the volume popover. Any
+    // in-flight consult is abandoned outright (not merged) — ending the
+    // whole call takes the private side-conversation down with it, same as
+    // hanging up on a real phone mid-consult would.
     setKeypadOpen(false);
+    setConferenceOpen(false);
+    setConsult(undefined);
     hangUpTimeoutsRef.current.push(
       window.setTimeout(() => {
         setIsExiting(true);
         hangUpTimeoutsRef.current.push(
           window.setTimeout(() => {
-            onHangUp();
+            if (mergedInteractions?.length && onEndAllCalls) {
+              onEndAllCalls();
+            } else {
+              onHangUp();
+            }
           }, HANG_UP_EXIT_MS)
         );
       }, HANG_UP_HOLD_MS)
     );
   };
+  // Matches `handleHangUp`'s own scope decision just above — the button's
+  // own label needs to say what it's ACTUALLY about to do (end one call vs.
+  // every bridged member at once), not just always read "End Call" while
+  // silently taking down more than that.
+  const endCallLabel = mergedInteractions?.length ? "End All Calls" : "End Call";
+  const endingLabel = mergedInteractions?.length ? "Ending All Calls..." : "Hanging Up...";
 
   return (
     // Per explicit request/reference screenshot: this bar floats as its own
@@ -797,6 +1568,154 @@ export function VoiceCallControls({
         className
       )}
     >
+      {/* Consult banner — ported from the reference app's `ConsultBanner`
+          (see `ConferencePicker`'s own top doc comment for the full port
+          history). Sits above the normal control row, same as the
+          reference; the row itself is untouched underneath it (Hold's own
+          active/red styling is what shows the primary customer is on hold
+          during a consult — see `ConsultBanner`'s own doc comment). */}
+      {consult && (
+        <ConsultBanner
+          customerLabel={customerLabel ?? "Customer"}
+          customerOnHold={onHold}
+          consultName={consult.name}
+          consultOnHold={consult.isOnHold}
+          onToggleHold={handleSwapConsult}
+          onCancel={handleCancelConsult}
+          onMerge={handleMergeConsult}
+        />
+      )}
+      {/* Participant strip — ONE consolidated bar for BOTH "who's merged
+          into this call" mechanisms (a `colleagues` Conference and a
+          `mergedInteractions` Merge-Calls bridge), not two separate stacked
+          bars each repeating their own "You"/primary-customer pair. Per a
+          design critique (merging two live calls, then separately
+          consulting a colleague into one leg, produced two full-width
+          bars sitting on top of each other — "too much to keep track of"):
+          the duplicate "You"/customer chips were the actual bulk, not the
+          roster content itself, so folding both groups into one strip
+          — sharing a single "You"/customer pair up top — removes that
+          duplication outright rather than trying to shrink either bar
+          individually. A thin vertical divider (`h-5 w-px bg-lyra-border-
+          subtle`) separates the "You"/customer pair from each present
+          group, and separates the two groups from each other when both
+          are present, so the strip still reads as distinct clusters
+          despite sharing one box. Each group's pills also carry their own
+          `kind` tint (`ParticipantChip`'s own doc comment) so a colleague
+          and a bridged customer are visually distinguishable even without
+          the divider, since the whole point of this fix is that the two
+          should never look like the same kind of thing.
+
+          Each group keeps its OWN independent gating rather than one
+          blanket condition on the whole strip: the colleague group still
+          hides the instant a NEW consult starts (`!consult` —
+          `ConsultBanner` takes over that exact "who's on this call"
+          message while a consult is being set up, same as before), but the
+          merged-call group does NOT hide for an unrelated in-progress
+          consult — an agent who's both on a bridged call AND mid-consult
+          on one leg of it still needs to see the bridge/Un-merge/End-all
+          controls, same as prior to this consolidation. `showColleagues`/
+          `showMerged` below are what let the strip render with just one
+          group present (the other's chips and divider simply don't
+          render) without duplicating the "is there anything to show at
+          all" check three times.
+
+          Bordered/bg card (`rounded-lyra-md border border-lyra-border-
+          subtle bg-lyra-bg-surface-base px-3 py-2`) — same container
+          treatment `ConsultBanner` (just above) already uses for the
+          identical "who's on this call" concept, per an earlier design
+          critique (a merged-roster state that read as less important than
+          the transient consult state it replaces, purely for lacking a
+          visible container). `overflow-x-auto` so a long roster scrolls
+          horizontally within this one row rather than wrapping the whole
+          bar taller. "You" gets no actions (`isSelf`); the primary
+          customer pill's own hold toggle is `setOnHold` DIRECTLY (not the
+          main Hold button below) — same "this pill only ever holds/
+          resumes the one person it represents" independence every
+          colleague pill already has. */}
+      {(() => {
+        const showColleagues = colleagues.length > 0 && !consult;
+        const showMerged = !!mergedInteractions?.length;
+        if (!showColleagues && !showMerged) return null;
+        return (
+          <div className="mb-2 flex items-center gap-1.5 overflow-x-auto rounded-lyra-md border border-lyra-border-subtle bg-lyra-bg-surface-base px-3 py-2">
+            <ParticipantChip label="You" isSelf isOnHold={false} />
+            <ParticipantChip
+              label={customerLabel ?? "Customer"}
+              isOnHold={onHold}
+              onToggleHold={() => setOnHold(!onHold)}
+            />
+            {showColleagues && (
+              <>
+                <span className="h-5 w-px shrink-0 bg-lyra-border-subtle" aria-hidden="true" />
+                {colleagues.map((colleague) => (
+                  <ParticipantChip
+                    key={colleague.id}
+                    label={colleague.name}
+                    kind="colleague"
+                    isInternalAgent
+                    isOnHold={colleague.isOnHold}
+                    onToggleHold={() => handleToggleColleagueHold(colleague.id)}
+                    onTransfer={handleTransferColleague}
+                    onHangUp={() => handleDropColleague(colleague.id)}
+                  />
+                ))}
+              </>
+            )}
+            {showMerged && (
+              <>
+                <span className="h-5 w-px shrink-0 bg-lyra-border-subtle" aria-hidden="true" />
+                {mergedInteractions!.map((interaction) => (
+                  <ParticipantChip
+                    key={interaction.id}
+                    label={interaction.name}
+                    kind="merged"
+                    onSelect={
+                      interaction.selectable !== false && onSelectMergedInteraction
+                        ? () => onSelectMergedInteraction(interaction.id)
+                        : undefined
+                    }
+                  />
+                ))}
+                {/* Group-level action (Un-merge only now) — per explicit
+                    follow-up ("look at end all icon for a merged call and
+                    the end call button from the original voice controls.
+                    They seem to be redundant in this scenario"): this strip
+                    used to ALSO carry its own "End all calls" icon +
+                    inline confirm right here, sitting next to the main
+                    bar's own big red "End Call" button below — two visible
+                    controls both ultimately ending the call(s), just with
+                    different (and non-obvious, icon-only) scope. Removed
+                    outright rather than relabeled: the main "End Call"
+                    button (below) now does its job instead — see
+                    `handleHangUp`'s own doc comment for how it picks the
+                    right scope (`onEndAllCalls` vs. plain `onHangUp`)
+                    depending on whether a merge is actually active, so
+                    there's exactly one visible "end" control regardless of
+                    which state the call is in. The SAME divider style used
+                    between the two roster groups above still separates
+                    Un-merge from the roster itself, so it still reads as a
+                    whole-call action, not an action on whichever merged
+                    customer happens to sit next to it. */}
+                <span className="h-5 w-px shrink-0 bg-lyra-border-subtle" aria-hidden="true" />
+                <span className="ml-auto flex shrink-0 items-center gap-1">
+                  {onUnmergeCalls && (
+                    <button
+                      type="button"
+                      title="Un-merge calls"
+                      aria-label="Un-merge calls"
+                      onClick={onUnmergeCalls}
+                      className="flex h-6 w-6 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
+                    >
+                      <Split className="h-3.5 w-3.5" strokeWidth={2} />
+                    </button>
+                  )}
+                </span>
+              </>
+            )}
+          </div>
+        );
+      })()}
       {/* This card used to be one of three branches (wide two-row centered
           card / compact icon-only row / `stretch` single-row wide) picked
           by `stretch`+`isCompact` — see this file's own top doc comment
@@ -890,7 +1809,64 @@ export function VoiceCallControls({
           )}
           <div className="flex min-w-0 flex-col justify-center">
             {customerLabel && (
-              <span className="lyra-body-sm truncate text-lyra-fg-primary">{customerLabel}</span>
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="lyra-body-sm truncate text-lyra-fg-primary">{customerLabel}</span>
+                {/* Conference indicator — per explicit follow-up request
+                    ("show in the voice control bar that there is a
+                    conference happening. A label and/or icon calling
+                    attention that this call is in a conference"): once any
+                    colleague is actually merged in. Same `Users` glyph the
+                    left-nav assignment card now also shows for this exact
+                    state (`InteractionNavItemProps.isConferenceCall`,
+                    interaction-nav-item.tsx) — one consistent "this is a
+                    conference" signal across both surfaces.
+
+                    Per a design critique (this one "Conference" tag used to
+                    ALSO cover a Merge-Calls bridge — two structurally
+                    different relationships rendering as the exact same
+                    chip, with no way to tell which kind of multi-party
+                    state was actually active): this tag is now SCOPED to
+                    `colleagues` only — an internal agent/skill merged into
+                    this one customer's own thread — and a second, separate
+                    "Merged call" tag (below) covers the bridged-interaction
+                    case instead. Both can render at once (gap-1 between
+                    them via the parent's own `gap-1.5`), reflecting that
+                    they really are two independent things that can both be
+                    true on the same call at the same time — collapsing
+                    that reality down to a single chip is exactly what
+                    created the ambiguity. */}
+                {colleagues.length > 0 && (
+                  <Tag
+                    label="Conference"
+                    variant="info"
+                    shape="pill"
+                    className="shrink-0"
+                    icon={<Users className="h-3 w-3" strokeWidth={1.5} />}
+                  />
+                )}
+                {/* Merged-call indicator — a Merge-Calls bridge (two fully
+                    separate Interactions spliced together), distinct from
+                    the internal "Conference" case above. Reuses `Merge`,
+                    the SAME icon the "Merge Calls" kebab menu item already
+                    uses (channel-row.tsx) — one consistent glyph for this
+                    concept across the entry point and the resulting state,
+                    same reasoning the Conference tag's own `Users` glyph
+                    already follows for ITS concept. `teal` (one of Tag's
+                    three fixed categorical-accent variants — see
+                    `TagVariant`'s own doc comment, tag.tsx) rather than
+                    `info` specifically so it reads as a visually distinct
+                    category from the blue "Conference" tag, not a second
+                    copy of the same status color. */}
+                {!!mergedInteractions?.length && (
+                  <Tag
+                    label="Merged call"
+                    variant="teal"
+                    shape="pill"
+                    className="shrink-0"
+                    icon={<Merge className="h-3 w-3" strokeWidth={1.5} />}
+                  />
+                )}
+              </span>
             )}
             {/* Timer — moved here from its old trailing position (see this
               bar's own git history: "move the timer to the far right after
@@ -990,17 +1966,33 @@ export function VoiceCallControls({
                 icon={onHold ? <Play className="h-5 w-5" strokeWidth={1.5} /> : <Pause className="h-5 w-5" strokeWidth={1.5} />}
                 active={onHold}
                 aria-label={onHold ? "Resume" : "Hold"}
+                // Red (critical), not amber (warning) — per explicit follow-up
+                // request ("change the hold color from its current color to
+                // a red color") — matches `ParticipantChip`'s own per-
+                // participant hold icon, which already used critical-red for
+                // this exact state.
                 className={
                   onHold
-                    ? "text-lyra-status-warning-strong bg-lyra-status-warning-subtle hover:text-lyra-status-warning-strong"
+                    ? "text-lyra-status-critical-strong bg-lyra-status-critical-subtle hover:text-lyra-status-critical-strong"
                     : undefined
                 }
                 onClick={() => {
                   const next = !onHold;
                   setOnHold(next);
-                  onAddToast?.({ variant: "info", title: next ? "Call on hold" : "Call resumed" });
+                  setColleagues((prev) => prev.map((c) => ({ ...c, isOnHold: next })));
                 }}
-                disabled={isEnding}
+                // Disabled during a consult too — `ConsultBanner`'s own
+                // two per-party Hold buttons own hold-toggling for that
+                // duration (they have to flip the customer's AND the
+                // consult leg's hold in lockstep, which this button
+                // doesn't know about), and this button's own cascade-to-
+                // every-colleague behavior below would otherwise fight it.
+                // Also disabled once this call is bridged into a merged
+                // call (`mergedInteractions`) — holding one leg of a
+                // merge has no clear meaning once two independent
+                // customers are actually on the same bridge (see that
+                // prop's own doc comment).
+                disabled={isEnding || !!consult || !!mergedInteractions?.length}
               />
             </Tooltip>
           ) : (
@@ -1008,17 +2000,19 @@ export function VoiceCallControls({
               icon={onHold ? <Play className="h-5 w-5" strokeWidth={1.5} /> : <Pause className="h-5 w-5" strokeWidth={1.5} />}
               label={onHold ? "Resume" : "Hold"}
               active={onHold}
+              // Red (critical), not amber (warning) — see the compact
+              // variant's own identical comment just above.
               className={
                 onHold
-                  ? "text-lyra-status-warning-strong bg-lyra-status-warning-subtle hover:text-lyra-status-warning-strong"
+                  ? "text-lyra-status-critical-strong bg-lyra-status-critical-subtle hover:text-lyra-status-critical-strong"
                   : undefined
               }
               onClick={() => {
                 const next = !onHold;
                 setOnHold(next);
-                onAddToast?.({ variant: "info", title: next ? "Call on hold" : "Call resumed" });
+                setColleagues((prev) => prev.map((c) => ({ ...c, isOnHold: next })));
               }}
-              disabled={isEnding}
+              disabled={isEnding || !!consult || !!mergedInteractions?.length}
             />
           )}
           {controlsCompact ? (
@@ -1038,10 +2032,6 @@ export function VoiceCallControls({
                   setMasked(next);
                   if (next && recording) {
                     setRecording(false);
-                  }
-                  onAddToast?.({ variant: "info", title: next ? "Voice masking on" : "Voice masking off" });
-                  if (next && recording) {
-                    onAddToast?.({ variant: "info", title: "Recording stopped" });
                   }
                 }}
                 disabled={isEnding}
@@ -1081,10 +2071,6 @@ export function VoiceCallControls({
                 if (next && recording) {
                   setRecording(false);
                 }
-                onAddToast?.({ variant: "info", title: next ? "Voice masking on" : "Voice masking off" });
-                if (next && recording) {
-                  onAddToast?.({ variant: "info", title: "Recording stopped" });
-                }
               }}
               // See `isEnding`'s own doc comment above.
               disabled={isEnding}
@@ -1118,9 +2104,7 @@ export function VoiceCallControls({
                 className={recordDisabled ? "opacity-40" : undefined}
                 onClick={() => {
                   if (recordDisabled) return;
-                  const next = !recording;
-                  setRecording(next);
-                  onAddToast?.({ variant: next ? "success" : "info", title: next ? "Recording started" : "Recording stopped" });
+                  setRecording((prev) => !prev);
                 }}
                 onKeyDown={(e) => {
                   if (recordDisabled && (e.key === "Enter" || e.key === " ")) {
@@ -1142,9 +2126,7 @@ export function VoiceCallControls({
                 className={recordDisabled ? "opacity-40" : undefined}
                 onClick={() => {
                   if (recordDisabled) return;
-                  const next = !recording;
-                  setRecording(next);
-                  onAddToast?.({ variant: next ? "success" : "info", title: next ? "Recording started" : "Recording stopped" });
+                  setRecording((prev) => !prev);
                 }}
                 onKeyDown={(e) => {
                   if (recordDisabled && (e.key === "Enter" || e.key === " ")) {
@@ -1198,6 +2180,117 @@ export function VoiceCallControls({
                 // (false)`) rather than relying on this alone, since
                 // `disabled` only blocks NEW opens, not one already open.
                 disabled={isEnding}
+              />
+            )}
+          </Popover>
+          {/* Consult — per explicit request ("add a conference icon and
+              interaction to the voice controls ... match our app's existing
+              convention"), then built out further per a later explicit
+              follow-up ("continue to build this conference flow out ...
+              follow stoker-agent-test for the merge conference call flow"),
+              then per a later explicit follow-up ("change the conference
+              icon in the voice bar to the consult transfer icon. Change the
+              word 'conference' to Consult") renamed/re-iconed to match the
+              record header's own "Consult / Transfer" button exactly
+              (`TransferIcon`, same composite `ConsultTransferIcon`
+              recreates in lyra-ui's channel-row.tsx — see that function's
+              own doc comment) — that header button now opens this SAME
+              popover too (`conferenceOpen`/`onConferenceOpenChange` below),
+              so the two read as one shared "Consult" action regardless of
+              which button triggered it, not two separate features that
+              happen to look alike. Picking a row in `ConferencePicker` no
+              longer adds anyone directly — it starts a real consult
+              (`setConsult`, `handleCancelConsult`/`handleMergeConsult`
+              above), auto-holding the primary customer exactly the way the
+              reference's `startVoiceCallConsult` does, with
+              `ConsultBanner`/the participant strip (both rendered above
+              this row, below) as the actual merge UI. `disabled` includes
+              `!!consult` — only one consult can be in flight at a time,
+              same as the reference (there's no second Cancel/Merge banner
+              to show while one's already open); already-merged colleagues
+              don't block reopening this to add another. */}
+          <Popover
+            open={conferenceOpen && !isEnding}
+            onOpenChange={(next: boolean) => {
+              if (!isEnding) setConferenceOpen(next);
+            }}
+            // Per explicit request ("show the consult popup next to that
+            // selection, so a user doesn't have to jump away from where
+            // they just clicked"): this popover used to always anchor HERE
+            // (this button), even when it was actually opened from the
+            // record-header's own separate "Consult / Transfer" icon
+            // (agent-next-gen-transcript.tsx) — clicking that button popped
+            // this SAME popover open, but visibly in the wrong place (down
+            // here) regardless of where the agent actually clicked.
+            // `consultAnchorRef` (lifted to the page, cleared back to
+            // `null` whenever this popover closes — see each page's own
+            // `onConferenceOpenChange` wrapper) repositions it onto
+            // whichever element actually triggered the open instead; once
+            // cleared/`null` again, `children` (this button) goes back to
+            // being the anchor, same `virtualAnchorRef` escape hatch the
+            // "Merge Calls" picker already uses (AgentWorkspace2WithDeskPage.tsx)
+            // for the identical "opened from somewhere else entirely"
+            // situation. `asAnchor` is permanent (not conditional) here,
+            // since this button now drives `open` through its own explicit
+            // `onClick` below instead of relying on Radix's Trigger-
+            // injected click — `asAnchor` is what stops THAT injected click
+            // from also firing and immediately re-toggling right back.
+            asAnchor
+            virtualAnchorRef={consultAnchorRef}
+            placement="top"
+            bodyPadding={false}
+            content={
+              <ConferencePicker
+                onSelect={(person) => {
+                  setConferenceOpen(false);
+                  setConsult({ id: person.id, name: person.name, isOnHold: false });
+                  setOnHold(true);
+                }}
+              />
+            }
+          >
+            {controlsCompact ? (
+              <CompactCallControlButton
+                ref={consultButtonSelfRef}
+                icon={<TransferIcon />}
+                active={conferenceOpen}
+                aria-label="Consult"
+                title="Consult"
+                disabled={isEnding || !!consult}
+                // `asAnchor` above means this button no longer gets a
+                // click-to-toggle for free from Radix's own Trigger wiring
+                // — replaces it explicitly, same open/close toggle Radix's
+                // injected handler used to perform. Explicitly (re)sets the
+                // anchor to ITSELF on every open — see
+                // `consultButtonSelfRef`'s own doc comment for why this
+                // bar can't just lean on `consultAnchorRef` reverting to
+                // `null`/`children` on close.
+                onClick={() => {
+                  if (isEnding || consult) return;
+                  const next = !conferenceOpen;
+                  if (next) consultAnchorRef && (consultAnchorRef.current = consultButtonSelfRef.current);
+                  setConferenceOpen(next);
+                }}
+              />
+            ) : (
+              <WideCallControlButton
+                ref={consultButtonSelfRef}
+                icon={<TransferIcon />}
+                label="Consult"
+                active={conferenceOpen}
+                aria-label="Consult"
+                // See `isEnding`'s own doc comment above — `handleHangUp`
+                // also force-closes this popover directly (`setConference
+                // Open(false)`) rather than relying on this alone, same
+                // reasoning Keypad's identical prop already gives.
+                disabled={isEnding || !!consult}
+                // See the compact variant's own identical comment just above.
+                onClick={() => {
+                  if (isEnding || consult) return;
+                  const next = !conferenceOpen;
+                  if (next) consultAnchorRef && (consultAnchorRef.current = consultButtonSelfRef.current);
+                  setConferenceOpen(next);
+                }}
               />
             )}
           </Popover>
@@ -1305,9 +2398,7 @@ export function VoiceCallControls({
                   onToggleVideo();
                   return;
                 }
-                const next = !localVideoAdded;
-                setLocalVideoAdded(next);
-                onAddToast?.({ variant: "info", title: next ? "Video added to call" : "Video removed from call" });
+                setLocalVideoAdded((prev) => !prev);
               }}
                 disabled={isEnding}
               />
@@ -1327,9 +2418,7 @@ export function VoiceCallControls({
                   onToggleVideo();
                   return;
                 }
-                const next = !localVideoAdded;
-                setLocalVideoAdded(next);
-                onAddToast?.({ variant: "info", title: next ? "Video added to call" : "Video removed from call" });
+                setLocalVideoAdded((prev) => !prev);
               }}
               // See `isEnding`'s own doc comment above.
               disabled={isEnding}
@@ -1396,14 +2485,14 @@ export function VoiceCallControls({
               of the icon+"End Call"/"Hanging Up..." text column, with a
               `Tooltip` standing in for the now-hidden label. */}
           {controlsIconOnly ? (
-            <Tooltip content={isEnding ? "Hanging Up..." : "End Call"} placement="top">
+            <Tooltip content={isEnding ? endingLabel : endCallLabel} placement="top">
               <Button
                 variant="destructive"
                 size="icon"
                 className="h-10 w-10 shrink-0"
                 onClick={handleHangUp}
                 disabled={isEnding}
-                aria-label={isEnding ? "Hanging Up..." : "End Call"}
+                aria-label={isEnding ? endingLabel : endCallLabel}
               >
                 {isEnding ? (
                   <Spinner variant="circle" size="sm" color="inverse" label="Hanging up" />
@@ -1425,7 +2514,7 @@ export function VoiceCallControls({
               ) : (
                 <PhoneOff className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
               )}
-              {isEnding ? "Hanging Up..." : "End Call"}
+              {isEnding ? endingLabel : endCallLabel}
             </Button>
           )}
         </div>
