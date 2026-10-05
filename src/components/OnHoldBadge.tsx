@@ -53,10 +53,23 @@ export function OnHoldCornerBadge({ className }: { className?: string }) {
   );
 }
 
-export function OnHoldPill({ className }: { className?: string }) {
+export function OnHoldPill({
+  className,
+  elapsedLabel,
+}: {
+  className?: string;
+  /** "MM:SS" duration since this call was put on hold (`Thread.
+   *  heldSinceTick`'s own doc comment has the full "why scoped to explicit
+   *  holds only" reasoning) — appended after "On Hold" as "On Hold · MM:SS"
+   *  per explicit request ("add a hold timer ... viewed from ... the
+   *  assignment tile"). Omit to render the plain "On Hold" text exactly as
+   *  before (the implicit "navigated away" on-hold case, which has no
+   *  well-defined duration to show). */
+  elapsedLabel?: string;
+}) {
   return (
     <span
-      aria-label="Call on hold"
+      aria-label={elapsedLabel ? `Call on hold ${elapsedLabel}` : "Call on hold"}
       className={cn(
         // Reverted per explicit follow-up: a prior pass gave this chip
         // itself a solid `warning-medium` fill + `warning-strong` border,
@@ -70,6 +83,7 @@ export function OnHoldPill({ className }: { className?: string }) {
     >
       <Pause className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
       On Hold
+      {elapsedLabel && <span className="tabular-nums">· {elapsedLabel}</span>}
     </span>
   );
 }

@@ -3622,10 +3622,39 @@ export function AgentWorkspaceAdvancedPage({
     return customers.length === 1 && customers.length < groupInteractions.length ? customers[0] : undefined;
   };
 
+  // Per explicit request ("a user has called an agent individually and
+  // later decides to add them into a conference") — see the identical
+  // helper's own doc comment in AgentWorkspace2WithDeskPage.tsx.
+  const findJoinableLiveCall = (interaction: Interaction): Interaction | undefined => {
+    const myKind = getMergeCandidateKind(interaction);
+    const alreadyMerged = getMergeGroupIds(interaction);
+    const candidates = interactions.filter(
+      (i) =>
+        i.id !== interaction.id &&
+        !alreadyMerged.includes(i.id) &&
+        !!findLiveVoiceThread(i) &&
+        (myKind === "customer" ? getMergeCandidateKind(i) !== "customer" : getMergeCandidateKind(i) === "customer")
+    );
+    return candidates.length === 1 ? candidates[0] : undefined;
+  };
+
+  // See `AgentWorkspace2WithDeskPage.tsx`'s identical helper for the full
+  // reasoning ("bring back the Merge function ... Always prioritize the
+  // customer").
+  const isJoinableCustomerAgentPair = (a: Interaction, b: Interaction): boolean =>
+    (getMergeCandidateKind(a) === "customer") !== (getMergeCandidateKind(b) === "customer");
+
   // Tracks which interactions the LeftNav's render loop (below) has already
   // folded into a combined `MergedCallNavCard` — see that render loop's own
   // doc comment for the full explanation.
   const renderedMergeGroupIds = new Set<string>();
+
+  // See `AgentWorkspace2WithDeskPage.tsx`'s identical declaration for the
+  // full "why" ("once a separate agent or skill call is merged into a
+  // conference, the assignment tile should go away").
+  const foldedIntoConferenceIds = new Set(
+    interactions.flatMap((i) => findLiveVoiceThread(i)?.colleagues?.map((c) => c.id) ?? [])
+  );
 
   const handleMergeCalls = (sourceId: string, targetId: string) => {
     setInteractions((prev) =>
@@ -3656,6 +3685,41 @@ export function AgentWorkspaceAdvancedPage({
     );
     setVoiceVideoWindowOpen(false);
     setVoiceVideoFullScreen(false);
+  };
+
+  // "Join call" — see `AgentWorkspace2WithDeskPage.tsx`'s identical handler
+  // for the full reasoning ("when an agent is added to a customer voice
+  // call through any consult/transfer action, it is considered a conference
+  // call, not a merged call — cannot be 'unmerged'"). Deliberately NOT
+  // `handleMergeCalls` — folds the agent/skill into the customer's own
+  // `Thread.colleagues` and ends the agent's own now-redundant separate
+  // call, rather than bridging two independent Interactions.
+  const handleJoinLiveCall = (thisId: string, otherId: string) => {
+    const thisInteraction = interactions.find((i) => i.id === thisId);
+    const otherInteraction = interactions.find((i) => i.id === otherId);
+    if (!thisInteraction || !otherInteraction) return;
+    const customerInteraction = getMergeCandidateKind(thisInteraction) === "customer" ? thisInteraction : otherInteraction;
+    const agentInteraction = customerInteraction.id === thisInteraction.id ? otherInteraction : thisInteraction;
+    const agentName = agentInteraction.customerName ?? "Unknown";
+    setInteractions((prev) =>
+      prev.map((i) => {
+        if (i.id === customerInteraction.id) {
+          const voiceThread = findLiveVoiceThread(i);
+          if (!voiceThread) return i;
+          return {
+            ...i,
+            threads: i.threads.map((t) =>
+              t.id === voiceThread.id
+                ? { ...t, colleagues: [...(t.colleagues ?? []), { id: agentInteraction.id, name: agentName }] }
+                : t
+            ),
+          };
+        }
+        if (i.id === agentInteraction.id) return { ...i, voiceCallEnded: true };
+        return i;
+      })
+    );
+    if (activeInteractionId === agentInteraction.id) switchActiveInteraction(customerInteraction.id);
   };
 
   // Toggles the Customer Information/"Session Details" panel — this
@@ -6934,7 +6998,11 @@ export function AgentWorkspaceAdvancedPage({
           stickyCaption={
             <AssignmentsSectionCaption
               expanded={navOpen}
-              count={interactions.length}
+              // See `AgentWorkspace2WithDeskPage.tsx`'s identical fix for
+              // the full reasoning ("once a separate agent or skill call is
+              // merged into a conference, the assignment tile should go
+              // away").
+              count={interactions.length - foldedIntoConferenceIds.size}
               sort={assignmentSort}
               onSortChange={setAssignmentSort}
               // Per explicit request — see `ADVANCED_ASSIGNMENT_SORT_
@@ -7168,6 +7236,8 @@ export function AgentWorkspaceAdvancedPage({
                 // group's first member (sort order) renders the combined
                 // tile instead of its normal `InteractionNavCard`.
                 if (renderedMergeGroupIds.has(interaction.id)) return null;
+                // See `foldedIntoConferenceIds`'s own doc comment above.
+                if (foldedIntoConferenceIds.has(interaction.id)) return null;
                 if (interaction.mergedInteractionIds?.length) {
                   const groupIds = getMergeGroupIds(interaction);
                   const groupInteractions = groupIds
@@ -7520,6 +7590,14 @@ export function AgentWorkspaceAdvancedPage({
                     // which only controls that OTHER button's own
                     // visibility, not this one). See `Interaction.
                     // mergedInteractionIds`'s own doc comment.
+                    // Per explicit follow-up request ("bring back the Merge
+                    // function and behavior for all voice calls. Show the
+                    // merge option in any voice call dropdown") — no longer
+                    // hidden for the customer+agent/skill single-candidate
+                    // pairing "Join call" also covers; see
+                    // `isJoinableCustomerAgentPair`'s own doc comment for
+                    // how the two entry points now stay consistent for that
+                    // one pairing.
                     onMergeCalls:
                       c.type === "voice" &&
                       !interaction.closed &&
@@ -8528,9 +8606,28 @@ export function AgentWorkspaceAdvancedPage({
                                     if (activeInteraction.threads.length > 1) handleDismissChannel(activeInteraction.id, c);
                                     else handleDismissInteraction(activeInteraction.id);
                                   }}
+                                  // See the left-nav row's own identical
+                                  // `onMergeCalls` comment above — always
+                                  // available on any live voice call now.
                                   onMergeCalls={
                                     c.type === "voice" && !activeInteraction.closed && !activeInteraction.voiceCallEnded
                                       ? () => openMergeCallsPicker(activeInteraction.id, recordHeaderMergeAnchorRef.current)
+                                      : undefined
+                                  }
+                                  // See `AgentWorkspace2WithDeskPage.tsx`'s
+                                  // identical prop for the full reasoning
+                                  // ("the dropdown consult/transfer listed in
+                                  // a dropdown should also show the consult
+                                  // popup") — reuses the exact same
+                                  // `conferenceOpen`/`consultAnchorRef`
+                                  // handler already wired onto
+                                  // `onSessionConsultTransferClick` below.
+                                  onConsultTransferClick={
+                                    c.type === "voice"
+                                      ? (anchorEl: HTMLElement) => {
+                                          consultAnchorRef.current = anchorEl;
+                                          setConferenceOpen(true);
+                                        }
                                       : undefined
                                   }
                                   showMenu={
@@ -10770,6 +10867,18 @@ export function AgentWorkspaceAdvancedPage({
               onSelectMergedInteraction={switchActiveInteraction}
               onUnmergeCalls={() => handleUnmergeCalls(displayedVoiceCallInteraction.id)}
               onEndAllCalls={() => handleEndAllCalls(displayedVoiceCallInteraction.id)}
+              // "Join live call" shortcut in the Consult/Transfer popover —
+              // see `findJoinableLiveCall`'s own doc comment for the exact
+              // customer+agent/skill-pair scope this covers, and each
+              // `onMergeCalls` call site's own comment for the kebab entry
+              // this intentionally overlaps with/replaces for that one case.
+              joinableCall={(() => {
+                const candidate = findJoinableLiveCall(displayedVoiceCallInteraction);
+                return candidate
+                  ? { id: candidate.id, name: candidate.customerName ?? "Unknown" }
+                  : undefined;
+              })()}
+              onJoinCall={(id) => handleJoinLiveCall(displayedVoiceCallInteraction.id, id)}
               elapsedSeconds={clockTick - displayedVoiceCallThread.startTick}
               onToggleTranscript={
                 isViewingLiveVoiceCallInteraction
@@ -11048,7 +11157,15 @@ export function AgentWorkspaceAdvancedPage({
                   size="sm"
                   disabled={!mergeCallsSelectedId}
                   onClick={() => {
-                    if (sourceInteraction && mergeCallsSelectedId) {
+                    if (!sourceInteraction || !mergeCallsSelectedId) return;
+                    const candidate = interactions.find((i) => i.id === mergeCallsSelectedId);
+                    // See `isJoinableCustomerAgentPair`'s own doc comment —
+                    // this one pairing always resolves to the same
+                    // conference-fold result "Join call" already produces.
+                    if (candidate && isJoinableCustomerAgentPair(sourceInteraction, candidate)) {
+                      handleJoinLiveCall(sourceInteraction.id, mergeCallsSelectedId);
+                      setMergeCallsPicker(null);
+                    } else {
                       handleMergeCalls(sourceInteraction.id, mergeCallsSelectedId);
                     }
                   }}

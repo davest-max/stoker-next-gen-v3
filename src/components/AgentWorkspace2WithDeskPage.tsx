@@ -4207,6 +4207,49 @@ export function AgentWorkspace2WithDeskPage({
     return customers.length === 1 && customers.length < groupInteractions.length ? customers[0] : undefined;
   };
 
+  // Per explicit request ("a user has called an agent individually and
+  // later decides to add them into a conference" — a live customer call AND
+  // a separate, already-live agent/skill call, bridged from the AGENT
+  // call's own Consult/Transfer popup instead of the generic "Merge Calls"
+  // kebab): finds the one OTHER live voice interaction eligible for that
+  // shortcut from `interaction`'s own point of view — the opposite "kind"
+  // (a customer call offers to join an agent/skill call and vice versa;
+  // never customer+customer or agent+agent, matching the scope explicitly
+  // confirmed), not already part of `interaction`'s own merge group, and
+  // genuinely still live. `undefined` whenever there's no such SINGLE
+  // candidate (per explicit request, this never shows a picker for more
+  // than one) — in that case the generic "Merge Calls" kebab stays the only
+  // path, unaffected (see each `onMergeCalls` call site's own doc comment).
+  const findJoinableLiveCall = (interaction: Interaction): Interaction | undefined => {
+    const myKind = getMergeCandidateKind(interaction);
+    const alreadyMerged = getMergeGroupIds(interaction);
+    const candidates = interactions.filter(
+      (i) =>
+        i.id !== interaction.id &&
+        !alreadyMerged.includes(i.id) &&
+        !!findLiveVoiceThread(i) &&
+        (myKind === "customer" ? getMergeCandidateKind(i) !== "customer" : getMergeCandidateKind(i) === "customer")
+    );
+    return candidates.length === 1 ? candidates[0] : undefined;
+  };
+
+  // Per explicit follow-up request ("bring back the Merge function and
+  // behavior for all voice calls. Show the merge option in any voice call
+  // dropdown. Always prioritize the customer"): now that the generic
+  // "Merge Calls" kebab is always shown (even for a customer+agent/skill
+  // pair — `onMergeCalls`'s own doc comment above), the Merge Calls
+  // picker's own confirm button (below) needs to tell that ONE specific
+  // pairing apart from every other, so it can route it through the SAME
+  // conference-fold `handleJoinLiveCall` already produces for it (true,
+  // un-mergeable Conference — per the user's own confirmed answer, "always
+  // prioritize the customer" means this pairing keeps resolving to exactly
+  // the one Conference result regardless of which entry point reached it,
+  // not two different-looking outcomes for the same action). A real
+  // customer+customer (or agent+agent/skill) pairing still goes through
+  // `handleMergeCalls`, the genuine Merge/Un-merge bridge.
+  const isJoinableCustomerAgentPair = (a: Interaction, b: Interaction): boolean =>
+    (getMergeCandidateKind(a) === "customer") !== (getMergeCandidateKind(b) === "customer");
+
   // Tracks which interactions the LeftNav's render loop (below) has already
   // folded into a combined `MergedCallNavCard` — recomputed fresh every
   // render, read-and-mutated in sorted-render order so every member of a
@@ -4214,6 +4257,23 @@ export function AgentWorkspace2WithDeskPage({
   // that first member's own combined tile) rather than also rendering its
   // own separate card.
   const renderedMergeGroupIds = new Set<string>();
+
+  // Every interaction id currently folded into some OTHER live interaction's
+  // own `Thread.colleagues` — i.e. an agent/skill call that's been "Join
+  // call"-ed into a customer's conference (`handleJoinLiveCall` below). Per
+  // explicit follow-up request ("once a separate agent or skill call is
+  // merged into a conference, the assignment tile should go away"): unlike
+  // a normal Hang Up (which deliberately still leaves its card behind for
+  // after-call work — see `voiceCallEnded`'s own doc comment), a Join-call
+  // fold means this call was never really a separate thing to manage
+  // anymore — it's now just a named row inside the customer's own combined
+  // conference tile (`additionalParticipants`/`cardIsConferenceCall` below),
+  // so there's nothing left here to show or dismiss on its own. Computed
+  // fresh every render, same convention `renderedMergeGroupIds` above
+  // already follows, and checked in the render loop right alongside it.
+  const foldedIntoConferenceIds = new Set(
+    interactions.flatMap((i) => findLiveVoiceThread(i)?.colleagues?.map((c) => c.id) ?? [])
+  );
 
   const handleMergeCalls = (sourceId: string, targetId: string) => {
     setInteractions((prev) =>
@@ -4244,6 +4304,49 @@ export function AgentWorkspace2WithDeskPage({
     );
     setVoiceVideoWindowOpen(false);
     setVoiceVideoFullScreen(false);
+  };
+
+  // "Join call" (`VoiceCallControlsProps.onJoinCall`'s own doc comment) —
+  // reached from the Consult/Transfer popover's own "Join call" row
+  // (`joinableCall`/`findJoinableLiveCall` above), NOT the generic "Merge
+  // Calls" kebab right above. Per explicit follow-up correction ("when an
+  // agent is added to a customer voice call through any consult/transfer
+  // action, it is considered a conference call, not a merged call — cannot
+  // be 'unmerged'"): this deliberately does NOT call `handleMergeCalls` (a
+  // real, later-un-mergeable bridge between two independent Interactions) —
+  // it folds the agent/skill straight into the CUSTOMER's own thread as a
+  // `Thread.colleagues` entry (the exact same shape an in-call Consult-then-
+  // Merge already produces) and ends the agent's own now-redundant separate
+  // call outright (`voiceCallEnded: true`, same flag Hang Up already sets).
+  // There's no un-join path for this result, same as any other Consult-
+  // grown colleague — "Merge Calls"/`handleUnmergeCalls` stay the only
+  // un-mergeable path, and only for an actual bridge.
+  const handleJoinLiveCall = (thisId: string, otherId: string) => {
+    const thisInteraction = interactions.find((i) => i.id === thisId);
+    const otherInteraction = interactions.find((i) => i.id === otherId);
+    if (!thisInteraction || !otherInteraction) return;
+    const customerInteraction = getMergeCandidateKind(thisInteraction) === "customer" ? thisInteraction : otherInteraction;
+    const agentInteraction = customerInteraction.id === thisInteraction.id ? otherInteraction : thisInteraction;
+    const agentName = agentInteraction.customerName ?? "Unknown";
+    setInteractions((prev) =>
+      prev.map((i) => {
+        if (i.id === customerInteraction.id) {
+          const voiceThread = findLiveVoiceThread(i);
+          if (!voiceThread) return i;
+          return {
+            ...i,
+            threads: i.threads.map((t) =>
+              t.id === voiceThread.id
+                ? { ...t, colleagues: [...(t.colleagues ?? []), { id: agentInteraction.id, name: agentName }] }
+                : t
+            ),
+          };
+        }
+        if (i.id === agentInteraction.id) return { ...i, voiceCallEnded: true };
+        return i;
+      })
+    );
+    if (activeInteractionId === agentInteraction.id) switchActiveInteraction(customerInteraction.id);
   };
 
   // Click on the header's toggle icon — always opens/closes the panel, in
@@ -7445,7 +7548,14 @@ export function AgentWorkspace2WithDeskPage({
           stickyCaption={
             <AssignmentsSectionCaption
               expanded={navOpen}
-              count={interactions.length}
+              // Per explicit follow-up request ("once a separate agent or
+              // skill call is merged into a conference, the assignment tile
+              // should go away") — an interaction folded into another's own
+              // conference (`foldedIntoConferenceIds` above) doesn't render
+              // its own card any more, so it shouldn't count toward this
+              // total either; a plain `interactions.length` read "(2)" for
+              // what visibly renders as one combined tile.
+              count={interactions.length - foldedIntoConferenceIds.size}
               sort={assignmentSort}
               onSortChange={setAssignmentSort}
               // Per explicit request — see `PHASE2_ASSIGNMENT_SORT_OPTIONS`'s
@@ -7666,6 +7776,8 @@ export function AgentWorkspace2WithDeskPage({
                 // group's first member (sort order) renders the combined
                 // tile instead of its normal `InteractionNavCard`.
                 if (renderedMergeGroupIds.has(interaction.id)) return null;
+                // See `foldedIntoConferenceIds`'s own doc comment above.
+                if (foldedIntoConferenceIds.has(interaction.id)) return null;
                 if (interaction.mergedInteractionIds?.length) {
                   const groupIds = getMergeGroupIds(interaction);
                   const groupInteractions = groupIds
@@ -7863,7 +7975,15 @@ export function AgentWorkspace2WithDeskPage({
                     // (`OnHoldBadge.tsx`) the card's own header already
                     // shows, rather than leaving `elapsed` (still computed
                     // normally above) visibly ticking underneath it.
-                    elapsedOverride: channelOnHold ? <OnHoldPill /> : undefined,
+                    elapsedOverride: channelOnHold ? (
+                      <OnHoldPill
+                        elapsedLabel={
+                          c.heldByAgent && c.heldSinceTick !== undefined
+                            ? formatElapsedTime(clockTick - c.heldSinceTick)
+                            : undefined
+                        }
+                      />
+                    ) : undefined,
                     preview: c.preview,
                     current: c.id === currentId,
                     // See `effectiveAwaitingResponse` above — not read
@@ -7935,6 +8055,17 @@ export function AgentWorkspace2WithDeskPage({
                     // Voice-only, same liveness gate as `onEndCall` just
                     // above. See `Interaction.mergedInteractionIds`'s own
                     // doc comment (agent-next-gen-interaction-dashboard.tsx).
+                    //
+                    // Per explicit follow-up request ("bring back the Merge
+                    // function and behavior for all voice calls. Show the
+                    // merge option in any voice call dropdown") — no longer
+                    // hidden for the customer+agent/skill single-candidate
+                    // pairing "Join call" also covers; this kebab entry is
+                    // now ALWAYS available on any live voice call, same as
+                    // before "Join call" existed. The picker's own "Merge"
+                    // confirm button (below) is what now keeps the two
+                    // entry points from producing two different-looking
+                    // results for that one pairing — see its own comment.
                     onMergeCalls:
                       c.type === "voice" && !interaction.closed && !interaction.voiceCallEnded
                         ? () => openMergeCallsPicker(interaction.id, interactionCardRefs.get(interaction.id) ?? null)
@@ -9060,9 +9191,39 @@ export function AgentWorkspace2WithDeskPage({
                                       if (activeInteraction.threads.length > 1) handleDismissChannel(activeInteraction.id, c);
                                       else handleDismissInteraction(activeInteraction.id);
                                     }}
+                                    // See the left-nav row's own identical
+                                    // `onMergeCalls` comment above — always
+                                    // available on any live voice call now,
+                                    // no longer hidden for the customer+
+                                    // agent/skill pairing "Join call" also
+                                    // covers.
                                     onMergeCalls={
                                       c.type === "voice" && !activeInteraction.closed && !activeInteraction.voiceCallEnded
                                         ? () => openMergeCallsPicker(activeInteraction.id, recordHeaderMergeAnchorRef.current)
+                                        : undefined
+                                    }
+                                    // Per explicit follow-up request ("the
+                                    // dropdown consult/transfer listed in a
+                                    // dropdown should also show the consult
+                                    // popup"): this kebab's own "Consult /
+                                    // Transfer" row used to be a plain no-op
+                                    // (channel-row.tsx's `buildDigitalMenuItems`/
+                                    // `buildVoiceMenuItems` never wired an
+                                    // `onClick` for it at all). Reuses the
+                                    // EXACT SAME handler already wired onto
+                                    // `InteractionTranscript`'s own standalone
+                                    // button (`onSessionConsultTransferClick`
+                                    // below) — same `conferenceOpen`/
+                                    // `consultAnchorRef` mechanism, just a
+                                    // second entry point into it. Voice-only,
+                                    // same gate that standalone button's own
+                                    // `onClick` already uses.
+                                    onConsultTransferClick={
+                                      c.type === "voice"
+                                        ? (anchorEl: HTMLElement) => {
+                                            consultAnchorRef.current = anchorEl;
+                                            setConferenceOpen(true);
+                                          }
                                         : undefined
                                     }
                                     showMenu={
@@ -10883,6 +11044,11 @@ export function AgentWorkspace2WithDeskPage({
               onConferenceOpenChange={handleConferenceOpenChange}
               consultAnchorRef={consultAnchorRef}
               onHold={displayedVoiceCallThread.heldByAgent}
+              heldElapsedSeconds={
+                displayedVoiceCallThread.heldSinceTick !== undefined
+                  ? clockTick - displayedVoiceCallThread.heldSinceTick
+                  : undefined
+              }
               onHoldChange={(next) => {
                 setInteractions((prev) =>
                   prev.map((interaction) =>
@@ -10890,7 +11056,9 @@ export function AgentWorkspace2WithDeskPage({
                       ? {
                           ...interaction,
                           threads: interaction.threads.map((c) =>
-                            c.id === displayedVoiceCallThread.id ? { ...c, heldByAgent: next } : c
+                            c.id === displayedVoiceCallThread.id
+                              ? { ...c, heldByAgent: next, heldSinceTick: next ? clockTick : undefined }
+                              : c
                           ),
                         }
                       : interaction
@@ -10951,6 +11119,22 @@ export function AgentWorkspace2WithDeskPage({
               onSelectMergedInteraction={switchActiveInteraction}
               onUnmergeCalls={() => handleUnmergeCalls(displayedVoiceCallInteraction.id)}
               onEndAllCalls={() => handleEndAllCalls(displayedVoiceCallInteraction.id)}
+              // "Join live call" shortcut in the Consult/Transfer popover —
+              // see `findJoinableLiveCall`'s own doc comment for the exact
+              // customer+agent/skill-pair scope this covers, and each
+              // `onMergeCalls` call site's own comment for the kebab entry
+              // this intentionally overlaps with/replaces for that one case.
+              // Reuses `handleMergeCalls` outright — same bridge, same
+              // automatic conference-style fold once the group resolves to
+              // exactly one customer + one agent/skill, just a second,
+              // more convenient entry point into it.
+              joinableCall={(() => {
+                const candidate = findJoinableLiveCall(displayedVoiceCallInteraction);
+                return candidate
+                  ? { id: candidate.id, name: candidate.customerName ?? "Unknown" }
+                  : undefined;
+              })()}
+              onJoinCall={(id) => handleJoinLiveCall(displayedVoiceCallInteraction.id, id)}
               elapsedSeconds={clockTick - displayedVoiceCallThread.startTick}
               onToggleTranscript={
                 isViewingLiveVoiceCallInteraction
@@ -11224,7 +11408,16 @@ export function AgentWorkspace2WithDeskPage({
                   size="sm"
                   disabled={!mergeCallsSelectedId}
                   onClick={() => {
-                    if (sourceInteraction && mergeCallsSelectedId) {
+                    if (!sourceInteraction || !mergeCallsSelectedId) return;
+                    const candidate = interactions.find((i) => i.id === mergeCallsSelectedId);
+                    // See `isJoinableCustomerAgentPair`'s own doc comment —
+                    // this one pairing always resolves to the same
+                    // conference-fold result "Join call" already produces,
+                    // regardless of which entry point reached it.
+                    if (candidate && isJoinableCustomerAgentPair(sourceInteraction, candidate)) {
+                      handleJoinLiveCall(sourceInteraction.id, mergeCallsSelectedId);
+                      setMergeCallsPicker(null);
+                    } else {
                       handleMergeCalls(sourceInteraction.id, mergeCallsSelectedId);
                     }
                   }}

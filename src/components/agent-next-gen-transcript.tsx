@@ -1544,6 +1544,16 @@ export function TranscriptSessionSeparator({
   // kebab dropdown itself is open, so the tooltip doesn't linger/overlap the
   // open menu here either.
   const [kebabMenuOpen, setKebabMenuOpen] = useState(false);
+  // Anchors the Consult/Transfer popover onto THIS kebab trigger when
+  // `transferInKebabMenu` folds "Consult / Transfer" into the dropdown
+  // instead of its own standalone button — see that item's own `onClick`
+  // below for the "why" (per explicit follow-up: "make the ellipses
+  // dropdown for consult/transfer have the same behavior" as the standalone
+  // button/record-header icon). `KebabMenuButton` forwards a ref straight to
+  // its real trigger element (kebab-menu-button.tsx), same as the
+  // standalone button's own `e.currentTarget` anchor just uses a different
+  // element to point at.
+  const consultKebabAnchorRef = useRef<HTMLButtonElement>(null);
   // The "Open Details Panel" button itself, computed once here (rather than
   // inline below) so both the plain and hover-preview-wrapped renderings
   // (see `detailsPanelPreviewContent`'s own doc comment above) share the
@@ -1838,27 +1848,29 @@ export function TranscriptSessionSeparator({
                 same popup as the 'conference' icon button does now"): the
                 "Add Participant" icon that used to lead this cluster is
                 gone outright (there was no real multi-party call model
-                behind it — see this button's own history, rule #30), and
-                this button is no longer purely decorative for a live voice
-                session — `onConsultTransferClick` (only ever passed, and
-                only ever wired, for `channelType === "voice"`) opens the
-                exact same Consult popover the voice call controls bar's own
-                "Consult" button does, via that bar's lifted
-                `conferenceOpen` state. Every other channel type keeps the
-                original no-op button (no live call, no popover to open).
-                Same `!isClosed && !isNewThread` gate as the rest of this
-                cluster. */}
-            {showConsultTransferAndAddParticipant && !transferInKebabMenu && !isClosed && !isNewThread && (
+                behind it — see this button's own history, rule #30). For a
+                live voice session this button used to open the exact same
+                Consult popover the voice call controls bar's own "Consult"
+                button does (`onConsultTransferClick`, via that bar's lifted
+                `conferenceOpen` state) — but per a LATER explicit follow-up
+                request ("hide consult transfer icon that appears next to
+                the outcome button for a voice call only. A user can access
+                it from the consult icon in the voice controls"), it's gone
+                outright for voice now too: that bar's own "Consult" button
+                (and this exact row's kebab, once `transferInKebabMenu`
+                folds it there — see that prop's own `onConsultTransferClick`
+                wiring) are both already reachable, so this third copy was
+                pure redundancy specifically for voice. Every other channel
+                type keeps the original no-op button (no live call, no
+                popover to open, and no alternative entry point to be
+                redundant with). Same `!isClosed && !isNewThread` gate as the
+                rest of this cluster. */}
+            {showConsultTransferAndAddParticipant && channelType !== "voice" && !transferInKebabMenu && !isClosed && !isNewThread && (
               <Button
                 variant="icon"
                 size="icon-sm"
                 title="Consult / Transfer"
                 className="text-lyra-fg-secondary"
-                onClick={
-                  channelType === "voice"
-                    ? (e: React.MouseEvent<HTMLButtonElement>) => onConsultTransferClick?.(e.currentTarget)
-                    : undefined
-                }
               >
                 <TransferIcon />
               </Button>
@@ -2124,6 +2136,7 @@ export function TranscriptSessionSeparator({
               // `kebabMenuOpen`/`onOpenChange` below, same pattern.
               <Tooltip content="More Options" placement="bottom" disabled={kebabMenuOpen || controlsReadOnly}>
                 <KebabMenuButton
+                  ref={consultKebabAnchorRef}
                   ariaLabel="More Options"
                   align="right"
                   disabled={controlsReadOnly}
@@ -2131,19 +2144,33 @@ export function TranscriptSessionSeparator({
                   onOpenChange={setKebabMenuOpen}
                   items={
                     [
-                      // Per explicit follow-up request (Advanced only — see
-                      // `transferInKebabMenu`'s own doc comment above): folds
-                      // the standalone Transfer icon (hidden above via that
-                      // same prop) into this menu instead, leading its item
-                      // list. Same unwired `onClick: () => {}` as every other
-                      // row here.
+                      // Per explicit follow-up request ("make the ellipses
+                      // dropdown for consult/transfer have the same
+                      // behavior"): folds the standalone Transfer icon
+                      // (hidden above via `transferInKebabMenu`) into this
+                      // menu instead, leading its item list — and now opens
+                      // the EXACT SAME Consult/Transfer popover the
+                      // standalone button/record-header icon does
+                      // (`onConsultTransferClick`, only ever wired for
+                      // `channelType === "voice"` — see the standalone
+                      // button's own identical gate just above), anchored to
+                      // this kebab trigger instead of a button that isn't
+                      // rendered in this mode. No longer the plain, no-op
+                      // `onClick: () => {}` every other row here still is.
                       ...(transferInKebabMenu
                         ? [
                             {
                               id: "consult-transfer",
                               label: "Consult / Transfer",
                               icon: <TransferIcon />,
-                              onClick: () => {},
+                              onClick:
+                                channelType === "voice"
+                                  ? () => {
+                                      if (consultKebabAnchorRef.current) {
+                                        onConsultTransferClick?.(consultKebabAnchorRef.current);
+                                      }
+                                    }
+                                  : () => {},
                             },
                           ]
                         : []),

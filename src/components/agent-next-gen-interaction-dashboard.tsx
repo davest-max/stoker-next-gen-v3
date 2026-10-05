@@ -242,6 +242,22 @@ export interface Thread {
    *  `undefined` whenever a fresh voice `Thread` replaces this one (every
    *  `newChannel` builder simply omits it). */
   heldByAgent?: boolean;
+  /** The `clockTick` value at the moment `heldByAgent` above was last set to
+   *  `true` — drives the "how long has this call been on hold" timer shown
+   *  next to the Hold/Resume button (`VoiceCallControls`'s own leading
+   *  identity line) and next to the `OnHoldPill` chip on this interaction's
+   *  `InteractionNavItem` row (`OnHoldBadge.tsx`). Set alongside
+   *  `heldByAgent` in each page's own `onHoldChange` handler passed to
+   *  `VoiceCallControls` (`next ? clockTick : undefined`); cleared back to
+   *  `undefined` the moment the agent resumes, same as `heldByAgent` itself
+   *  resets to `false`. Per explicit request ("add a hold timer for any
+   *  voice call in a hold state") — deliberately scoped to this EXPLICIT,
+   *  agent-pressed hold only, not the separate implicit "navigated away
+   *  from this interaction" on-hold reading (`channelOnHold`'s other half,
+   *  each page's own LeftNav `channels` builder) — that implicit case has no
+   *  single well-defined "since when" moment the way a real button press
+   *  does. */
+  heldSinceTick?: number;
   /** Every OTHER person currently merged into this voice call (beyond the
    *  primary customer and the agent) — per explicit follow-up request
    *  ("show all participant names in the assignment card also with a
