@@ -10809,6 +10809,12 @@ export function AgentWorkspaceAdvancedPage({
               // away from and back to the SAME call — see
               // `displayedVoiceCallInteraction`'s own doc comment above.
               key={`${displayedVoiceCallInteraction.id}:${displayedVoiceCallThread.id}`}
+              // Same identity as the `key` just above, passed through as a
+              // real prop too — see `VoiceCallControlsProps.callInstanceId`'s
+              // own doc comment for why ("the double bounce animation only
+              // happens in the first instance... adding more participants
+              // does not trigger the animation").
+              callInstanceId={`${displayedVoiceCallInteraction.id}:${displayedVoiceCallThread.id}`}
               className="bg-transparent px-0 pt-2 pb-0 animate-in slide-in-from-bottom-4 fade-in-0 duration-200"
               conferenceOpen={conferenceOpen}
               onConferenceOpenChange={handleConferenceOpenChange}

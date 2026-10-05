@@ -103,6 +103,7 @@
 // caller has a genuine contact match, same "initials over generic icon
 // once known" split that avatar convention already uses.
 import React, { useState, useRef, useEffect } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   Button,
@@ -672,83 +673,42 @@ interface VoiceCallConsult {
  *  `ParticipantChip`'s own exact hold-button styling (icon size/color,
  *  Play/Pause swap) for visual consistency with the post-merge roster —
  *  this is the same action, just before a colleague officially exists yet. */
-function ConsultBannerParty({
-  label,
-  onHold,
-  onToggleHold,
-  onTransfer,
-}: {
-  label: string;
-  onHold: boolean;
-  onToggleHold: () => void;
-  /** Presence alone gates the Transfer icon — only ever passed for the
-   *  consult target (the agent/skill), never the primary customer. Per
-   *  explicit request ("a user can toggle between an agent or skill and
-   *  customer. Show a transfer icon next to the agent/skill so upon
-   *  talking with them a user can then simply transfer the customer"):
-   *  completes the transfer outright (ends this agent's own leg, same as
-   *  `ParticipantChip`'s own identical `TransferIcon` button one merge
-   *  group up visually resembles) rather than first requiring a Merge. */
-  onTransfer?: () => void;
-}) {
-  return (
-    <div className="flex min-w-0 items-center gap-2">
-      <span
-        className={cn(
-          "flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-lyra-bg-surface-container-subtle lyra-body-xs-emphasis text-lyra-fg-secondary transition-opacity",
-          onHold && "opacity-40"
-        )}
-        aria-hidden="true"
-      >
-        {initialsFor(label)}
-      </span>
-      <span className={cn("lyra-body-sm truncate", onHold ? "text-lyra-fg-secondary" : "text-lyra-fg-default")}>
-        {label}
-      </span>
-      <button
-        type="button"
-        title={onHold ? `Resume ${label}` : `Hold ${label}`}
-        aria-label={onHold ? `Resume ${label}` : `Hold ${label}`}
-        onClick={onToggleHold}
-        className={cn(
-          "flex h-6 w-6 shrink-0 items-center justify-center rounded-full hover:bg-lyra-state-hover",
-          onHold ? "text-lyra-status-critical-strong" : "text-lyra-fg-secondary"
-        )}
-      >
-        {onHold ? <Play className="h-3.5 w-3.5" strokeWidth={2} /> : <Pause className="h-3.5 w-3.5" strokeWidth={2} />}
-      </button>
-      {onTransfer && (
-        // Same button styling/icon `ParticipantChip`'s own Transfer control
-        // uses (above) — one consistent "transfer" affordance across the
-        // pre-merge consult banner and the post-merge roster strip.
-        <button
-          type="button"
-          title={`Transfer call to ${label}`}
-          aria-label={`Transfer call to ${label}`}
-          onClick={onTransfer}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
-        >
-          <TransferIcon />
-        </button>
-      )}
-    </div>
-  );
-}
-
 /** Shown in place of this bar's normal content while a consult is in
  *  progress — ported from the reference app's identical `ConsultBanner`,
- *  then extended per explicit follow-up request ("provide a way to swap
- *  and hold between the consult and the customer"), then revised once
- *  more per a design critique + explicit follow-up ("dim the held
- *  participant's avatar in swap. Make the swap icon simply a hold icon
- *  button"): no more single combined "Swap" control or descriptive
- *  sentence to read — both parties render side by side via
- *  `ConsultBannerParty`, each with its own hold/resume button and its own
- *  dimmed-when-held avatar, so which leg is currently live is a GLANCE,
- *  not a read. Both buttons call the exact same `onToggleHold` — pressing
- *  either one is the identical action (there are only ever two states
- *  while not yet merged — see `VoiceCallConsult.isOnHold`'s own doc
- *  comment), so there's no need for two separate handlers. */
+ *  then revised several times (full history on the old, now-removed
+ *  `ConsultBannerParty`'s own git history: a combined "Swap" control →
+ *  per-party hold/resume buttons → a Transfer icon on the consult-target
+ *  row). A later pass ("bring the pill idea and design to the merge
+ *  consult flow. Two pills that are brought together via a little
+ *  animation and lines") made both parties actual `ParticipantChip`s — the
+ *  SAME bordered-pill component the post-merge roster strip uses (below)
+ *  — instead of a bespoke, lower-fidelity `ConsultBannerParty` that
+ *  duplicated most of that component's own markup, and connected them with
+ *  the same connector line the roster uses between its own pills.
+ *
+ *  This pass, per a further explicit follow-up ("don't show the
+ *  connecting line during merge consult until it's merged. keep the agent
+ *  call a bit further away so it can physically move closer to the
+ *  customer pill. Add animation so the changes are more fluid"): the
+ *  connector is GONE during the consult itself — per that request, a line
+ *  implies an already-joined call, which isn't true yet; it only actually
+ *  appears once "Merge call" lands this person in the real roster strip
+ *  below (that strip's own connector, unchanged). In its place, the
+ *  consult-target pill starts noticeably further right (`x: 32`, its own
+ *  `initial`, below) and SLIDES in toward the customer pill as it fades/
+ *  scales in — a real "being brought closer" motion, not just a fade in
+ *  place. A `type: "spring"` transition was tried first here, but at a
+ *  stiffness fast enough to feel "quick" it settled in well under 100ms —
+ *  too fast to actually perceive as sliding rather than just appearing.
+ *  `BOUNCE_EASE`/`BOUNCE_DURATION_S` below (an explicit 0.3s tween on a
+ *  slight-overshoot cubic-bezier, "easeOutBack") replaces it — a duration
+ *  short enough to read as "quick" but long enough to actually watch it
+ *  travel, with the overshoot giving it the same lively, not-flat feel
+ *  the spring was reached for in the first place. The container's own
+ *  `gap-3` (no connector line to fill
+ *  that space now) is what sets the "further away" resting distance
+ *  between the two pills during consult — wider than the roster's own
+ *  tighter, line-bridged spacing. */
 function ConsultBanner({
   customerLabel,
   customerOnHold,
@@ -767,26 +727,107 @@ function ConsultBanner({
   onToggleHold: () => void;
   onCancel: () => void;
   onMerge: () => void;
-  /** See `ConsultBannerParty.onTransfer`'s own doc comment — passed through
-   *  to the consult-target row only. */
+  /** Presence alone gates the Transfer icon on the consult-TARGET pill
+   *  only — see `ParticipantChip.onTransfer`'s own doc comment. */
   onTransfer: () => void;
 }) {
+  // See this function's own top doc comment for "why a tween, not a
+  // spring" — `easeOutBack`'s slight overshoot (the `1.56` below briefly
+  // exceeds 1) is what keeps this feeling lively/fluid despite being a
+  // fixed-duration tween rather than real spring physics. One shared
+  // transition covers every animated value (`opacity`, `scale`, `x`) —
+  // an earlier pass suspected `opacity` wasn't fading in parallel with
+  // the slide (polling each pill's raw `style` attribute live showed it
+  // pinned at 0 for the whole ~300ms, then snapping straight to 1).
+  // Re-verified with `getComputedStyle` instead (the actual rendered
+  // value) and it was a false alarm: opacity rises smoothly in lockstep
+  // with the slide the whole time (0.03 → 0.29 → 0.51 → 0.81 → 0.96 → 1).
+  // Framer Motion hardware-accelerates this animation via the browser's
+  // native Web Animations API and only commits the FINAL value onto the
+  // inline `style` attribute once the animation ends — it never
+  // per-frame-syncs that attribute mid-flight — so polling raw `style`
+  // only ever showed the stale pre-animation value until the last frame.
+  // `getComputedStyle` (or just watching the screen) is the only
+  // trustworthy way to verify a Framer Motion animation's real timing.
+  const BOUNCE_TRANSITION = { duration: 0.3, ease: [0.34, 1.56, 0.64, 1] as [number, number, number, number] };
   return (
-    <div className="mb-2 flex items-center gap-3 rounded-lyra-md border border-lyra-border-subtle bg-lyra-bg-surface-base px-3 py-2">
-      <ConsultBannerParty label={customerLabel} onHold={customerOnHold} onToggleHold={onToggleHold} />
-      <span aria-hidden="true" className="h-4 w-px shrink-0 bg-lyra-border-subtle" />
-      <ConsultBannerParty label={consultName} onHold={consultOnHold} onToggleHold={onToggleHold} onTransfer={onTransfer} />
+    <div className="mb-2 flex flex-wrap items-center gap-3">
+      {/* `initial` is left at its default (`true`) here — deliberately NOT
+          `initial={false}` the way the roster strip's own `AnimatePresence`
+          (below) uses it. That flag means "don't animate whatever's
+          already present the FIRST time I mount" — correct for the roster
+          strip, which is a long-lived list that persists across many
+          add/remove cycles and only wants NEW additions to animate, not
+          everyone replaying an entrance every time the strip itself first
+          appears. This banner is the opposite case: the entire component
+          (and this AnimatePresence) mounts FRESH every single time a
+          consult starts, and that fresh mount IS the moment we want the
+          two pills to visibly animate in — `initial={false}` here was
+          silently skipping that entrance animation entirely (caught live:
+          the pills just snapped straight to their resting position, no
+          slide, despite the `transition` below being configured). */}
+      <AnimatePresence>
+        <motion.span
+          key="customer"
+          initial={{ opacity: 0, scale: 0.5 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.5 }}
+          transition={BOUNCE_TRANSITION}
+          className="inline-flex"
+        >
+          <ParticipantChip label={customerLabel} isOnHold={customerOnHold} onToggleHold={onToggleHold} />
+        </motion.span>
+        {/* No connector line here — per explicit follow-up request ("don't
+            show the connecting line during merge consult until it's
+            merged"), that's reserved for the real roster strip below,
+            once this person is actually joined in. `x: 32` on the
+            consult-target pill's own `initial` (right below) is what gives
+            this gap its visual meaning instead — it starts noticeably
+            further away and slides in to close that exact distance.
+            Neither this pill nor the enclosing `AnimatePresence` use the
+            roster strip's own `layout`/`mode="popLayout"` — both exist
+            there to let OTHER pills reflow in parallel when one is
+            added/removed from a live list. This banner only ever shows
+            these same two fixed slots (nothing else is added/removed
+            around them for a position to need reconciling), so there's
+            no reflow to coordinate and no reason to pay for that
+            machinery here. (An earlier pass dropped `layout` suspecting
+            it was the cause of a separate opacity-not-fading bug — see
+            `BOUNCE_TRANSITION`'s own comment above for why that bug
+            turned out not to be real.) */}
+        <motion.span
+          key="consult-target"
+          initial={{ opacity: 0, scale: 0.5, x: 32 }}
+          animate={{ opacity: 1, scale: 1, x: 0 }}
+          exit={{ opacity: 0, scale: 0.5, x: 32 }}
+          transition={BOUNCE_TRANSITION}
+          className="inline-flex"
+        >
+          {/* `kind="colleague"` here (not just on the real post-merge
+              pill) is deliberate — the SAME blue tint the roster strip's
+              own colleague pills use, previewing what this person is
+              about to become the moment "Merge call" is pressed, rather
+              than looking like a plain, un-tinted pill that then suddenly
+              changes color post-merge. */}
+          <ParticipantChip
+            label={consultName}
+            kind="colleague"
+            isInternalAgent
+            isOnHold={consultOnHold}
+            onToggleHold={onToggleHold}
+            onTransfer={onTransfer}
+          />
+        </motion.span>
+      </AnimatePresence>
       {/* Per explicit follow-up request ("set a max width for the merge
           and cancel buttons, bring them much closer to the left-side of
-          that row"): dropped `ml-auto` (which used to push this pair flush
-          against the banner's right edge, leaving a large empty gap behind
-          the two party rows) — sitting right after the consult party now,
-          same `gap-3` spacing the rest of this row already uses, with any
-          leftover width just trailing empty on the right instead. Each
-          button also caps at a fixed `max-w-*` so neither grows past its
-          own label's natural width regardless of how much room this row
-          ends up with. */}
-      <div className="flex shrink-0 items-center gap-1.5">
+          that row"): sits right after the pills, same gap the roster
+          strip's own trailing "Un-merge calls" cluster uses, with any
+          leftover width just trailing empty on the right instead of
+          pushing this cluster flush to the far edge. Each button also
+          caps at a fixed `max-w-*` so neither grows past its own label's
+          natural width regardless of how much room this row ends up with. */}
+      <div className="ml-2 flex shrink-0 items-center gap-1.5">
         <Button variant="outline" size="sm" className="max-w-[120px]" onClick={onCancel}>Cancel consult</Button>
         <Button variant="default" size="sm" className="max-w-[100px]" onClick={onMerge}>Merge call</Button>
       </div>
@@ -794,17 +835,6 @@ function ConsultBanner({
   );
 }
 
-/** One merged colleague's pill in the participant strip (rendered once
- *  `colleagues.length > 0`) — ported from the reference app's
- *  `ParticipantChip`, narrowed to just the one action this bar actually
- *  supports per colleague: drop them from the call (no per-participant
- *  hold/transfer — see `CallColleague`'s own doc comment above for why).
- *  Same inline "Drop {name}?" Check/X confirm step the reference uses
- *  (`confirming` below) rather than dropping on a single click, and the
- *  same "stays armed until explicitly confirmed or cancelled" behavior —
- *  nothing else (moving the pointer away) dismisses it, so a stray brush
- *  of the mouse can't silently discard a drop the agent didn't mean to
- *  make yet. */
 /** One pill in the participant strip — ported from the reference app's
  *  identical `ParticipantChip` (`LiveVoiceCallBar.tsx`), same three-way
  *  reuse: "You" gets none of the three optional actions below (an agent
@@ -820,7 +850,12 @@ function ConsultBanner({
  *  tabs (never a real customer merged in — this app's picker has no
  *  Customers tab the way the reference's does), so every colleague pill
  *  passes this `true`; only the primary customer pill (never "internal")
- *  shows real initials. */
+ *  shows real initials. Per a later explicit follow-up ("bring the pill
+ *  idea and design to the merge consult flow"), `ConsultBanner` (above)
+ *  ALSO renders two of these directly — the customer and the consult
+ *  target — instead of its own separate, lower-fidelity pill markup; the
+ *  consult target passes `isInternalAgent`/`kind="colleague"` the same way
+ *  an already-merged colleague does, previewing what it's about to become. */
 function ParticipantChip({
   label,
   isSelf,
@@ -873,26 +908,23 @@ function ParticipantChip({
   const [confirming, setConfirming] = useState(false);
   // Per explicit follow-up request ("when a participant in a conference
   // call is merged or dropped, add a simply animation to enhance the sense
-  // of being added to the chain, or leaving"): a dropped colleague can't
-  // just disappear instantly the moment "Confirm drop" is clicked — React
-  // would unmount this pill in the same tick, leaving no time for an exit
-  // animation to actually play. `isLeaving` delays the REAL `onHangUp` call
-  // (which is what actually removes this colleague from the parent's own
-  // `colleagues` array) until after a brief `animate-out` plays here first,
-  // self-contained entirely inside this one pill — the parent's own array-
-  // removal logic is untouched. The entrance half needs no equivalent
-  // state: `animate-in` below is just a plain, unconditional class, so it
-  // plays automatically the one time this exact pill (a stable `key`, see
-  // the roster strip's own `.map()`) is actually inserted into the DOM —
-  // i.e. the moment a NEW colleague/merged member shows up — and never
-  // replays on an ordinary re-render of an already-mounted pill.
-  const [isLeaving, setIsLeaving] = useState(false);
-  const DROP_EXIT_MS = 300;
+  // of being added to the chain, or leaving"): enter/exit animation for
+  // this whole pill — and the "remaining pills slide together" reflow when
+  // one leaves (a later, separate follow-up: "animate that more fluidly,
+  // rather than so quick") — now both live one level up, at this
+  // component's own call site in the roster strip, as a `framer-motion`
+  // `motion.span` wrapper (`layout` + `AnimatePresence`). That's a genuine
+  // "animate a layout change" (FLIP) problem plain CSS can't do on its
+  // own — there's no property to transition a flex item sliding from one
+  // computed position to another the way `transform`/`opacity` can be
+  // transitioned directly. This component itself no longer needs its own
+  // `isLeaving`/delayed-removal plumbing (a prior, simpler pass's own
+  // workaround for the exact same "let the exit animation play before
+  // actually unmounting" problem `AnimatePresence` now solves directly) —
+  // "Confirm drop" below just calls `onHangUp` immediately again.
   return (
     <span
       className={cn(
-        isLeaving ? "animate-out zoom-out-50 fade-out-0 pointer-events-none" : "animate-in zoom-in-50 fade-in-0",
-        "duration-300",
         // Per explicit follow-up request ("go back to each individual
         // participant in its own pill shape rather than a row ... set a
         // border on the pill to help it stand out ... enlarge the
@@ -966,12 +998,11 @@ function ParticipantChip({
               type="button"
               aria-label={`Confirm drop ${label}`}
               onClick={() => {
-                // See `isLeaving`'s own doc comment above — the REAL
-                // removal (`onHangUp`) is deliberately delayed until after
-                // the exit animation has had time to play.
+                // See this component's own top doc comment — the exit
+                // animation (and delaying the actual unmount until it
+                // finishes) is now `AnimatePresence`'s job, one level up.
                 setConfirming(false);
-                setIsLeaving(true);
-                window.setTimeout(() => onHangUp?.(), DROP_EXIT_MS);
+                onHangUp?.();
               }}
               className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-status-critical-strong hover:bg-lyra-state-hover"
             >
@@ -1299,6 +1330,24 @@ export interface VoiceCallControlsProps {
    *  bug writeup. Omit to keep the original always-starts-empty behavior
    *  (a caller with no conference concept at all). */
   initialColleagues?: { id: string; name: string }[];
+  /** Same identity this bar's own `key` prop is built from at the call
+   *  site (`${interactionId}:${threadId}`) — passed through as a REGULAR
+   *  prop too (not just baked into `key`, which this component can't read
+   *  back) so the Conference tag's "just changed" bounce animation (see
+   *  `conferenceBubbling`'s own doc comment) can tell apart "a genuinely
+   *  new call, no bounce history yet" from "the same call this bar
+   *  already showed, just remounted." Per explicit bug report ("the
+   *  double bounce animation only happens in the first instance when a
+   *  conference call is created. Adding more participants does not
+   *  trigger the animation"): a colleague added via a path that ALSO
+   *  switches which interaction is displayed (`handleJoinLiveCall`) causes
+   *  exactly that remount, and the fresh instance's own local refs/state
+   *  reset to nothing — its "previous colleague count" would otherwise
+   *  read the ALREADY-POST-ADD count from `initialColleagues`, making the
+   *  addition that just happened look like no change at all. Omit to keep
+   *  the bounce working only within a single mount's own lifetime (fine
+   *  for a caller with no concept of this bar remounting mid-conference). */
+  callInstanceId?: string;
   /** Per explicit request (Agent Workspace 2.0 Phase 1 only): hides the
    *  "Add video" button entirely. This bar's own divider just before it
    *  stays either way — it still separates the call-feature cluster from
@@ -1403,6 +1452,22 @@ export interface VoiceCallControlsProps {
   className?: string;
 }
 
+// Module-level (NOT component state) — survives this bar's own remounts on
+// purpose. Records, per `callInstanceId`, the last colleague count the
+// Conference tag's "just changed" bounce has already fired for. See
+// `callInstanceId`'s own doc comment (`VoiceCallControlsProps`) for the
+// full bug this exists to fix: without a record that outlives any ONE
+// mount, a colleague added via a path that also remounts this bar (e.g.
+// `handleJoinLiveCall` switching which interaction is displayed) looks
+// identical, from the fresh instance's own point of view, to "nothing
+// changed" — `initialColleagues` already reflects the addition by the time
+// that instance's very first render runs. A plain module-level `Map`
+// (rather than anything React-managed) is deliberate: this is purely a
+// side-channel memory aid for an animation trigger, not real application
+// state — it never needs to cause a re-render on its own, just be read/
+// written from inside an effect that already runs for other reasons.
+const lastBouncedColleagueCountByCallInstance = new Map<string, number>();
+
 export function VoiceCallControls({
   onHangUp,
   elapsedSeconds,
@@ -1418,6 +1483,7 @@ export function VoiceCallControls({
   consultAnchorRef,
   onColleaguesChange,
   initialColleagues,
+  callInstanceId,
   showAddVideo = true,
   stretch = false,
   customerLabel,
@@ -1538,44 +1604,78 @@ export function VoiceCallControls({
   }, [initialColleagues]);
   // "Just changed" flourish for the Conference tag (below) — per explicit
   // follow-up request ("make the conference pill stand out more ... try a
-  // little animation bubble effect"), then revised twice more:
+  // little animation bubble effect"), then revised several times more:
   //  1. First pass was a soft `animate-ping` ring, deemed too subtle.
   //  2. Second pass added a second staggered ring + a `zoom-in` pop, deemed
   //     too busy (and started immediately, with no pause to actually
   //     notice a "before" state first).
-  //  3. This pass, per the LATEST explicit follow-up ("delay the conference
-  //     pill animation for like 1/2 second. have a bubble type effect where
-  //     it grows a bit too large then reduces to normal size" — and a
-  //     direct answer confirming this should REPLACE the ping rings, not
-  //     run alongside them): no more rings at all. `conferenceBubbling`
-  //     drives a single `scale-125` toggle on the Tag itself (render site
-  //     below), which — combined with that element's own `transition-
-  //     transform` — animates smoothly in BOTH directions off one boolean:
-  //     true grows it, false (which this same effect schedules shortly
-  //     after) shrinks it back, with the browser interpolating the "reduces
-  //     to normal size" half for free rather than needing a third explicit
-  //     phase. `BUBBLE_DELAY_MS` is the pause before this starts at all —
-  //     the actual state change (someone joins/drops) happens instantly,
-  //     then this flourish fires half a second later, so there's a beat
-  //     where the roster itself visibly updates first, before the pill
-  //     reacts. Tracked via a ref (not just comparing to the previous
-  //     render's own value) specifically so this only fires on a REAL
-  //     change, not on every re-render this bar happens to get while the
-  //     count stays the same.
-  const prevColleagueCountRef = useRef(colleagues.length);
+  //  3. Third pass: no rings at all, a single CSS `scale-125` toggle
+  //     (delayed half a second, grow-then-settle).
+  //  4. This pass, per the LATEST explicit follow-up ("the conference pill
+  //     animation can be a bit more lively. Like two bubbles so it seems
+  //     more organic" — confirmed answer: "Double bounce"): a single smooth
+  //     grow-then-settle read as a little flat, so the Tag now plays TWO
+  //     visible rebounds instead of one — `BUBBLE_SCALE_KEYFRAMES` below
+  //     (100% → 130% → 90% → 110% → 100%), like a ball settling after two
+  //     bounces, via `framer-motion`'s keyframe-array `animate` (already a
+  //     dependency as of the roster strip's own `layout` animations — no
+  //     new library for this). `BUBBLE_DELAY_MS` is still the pause before
+  //     this starts at all — the actual state change (someone joins/drops)
+  //     happens instantly, then this flourish fires half a second later, so
+  //     there's a beat where the roster itself visibly updates first,
+  //     before the pill reacts. Tracked via a ref (not just comparing to
+  //     the previous render's own value) specifically so this only fires
+  //     on a REAL change, not on every re-render this bar happens to get
+  //     while the count stays the same — seeded from
+  //     `lastBouncedColleagueCountByCallInstance` (module-level, see its
+  //     own doc comment) rather than unconditionally from `colleagues.
+  //     length`, so a REMOUNT of this same underlying call doesn't lose
+  //     track of what it had already bounced for. Falls back to the
+  //     current count when there's no recorded history yet (a genuinely
+  //     new call, or `callInstanceId` wasn't passed) — the original,
+  //     "no bounce on first mount" behavior.
+  const prevColleagueCountRef = useRef(
+    (callInstanceId !== undefined && lastBouncedColleagueCountByCallInstance.get(callInstanceId)) ??
+      colleagues.length
+  );
   const [conferenceBubbling, setConferenceBubbling] = useState(false);
   const BUBBLE_DELAY_MS = 500;
-  const BUBBLE_GROW_MS = 220;
-  // Holds whichever of the two nested timeouts below is currently pending,
-  // so the effect's own cleanup can always clear "whatever's running right
-  // now" without needing two separately-named refs.
+  // Total time the two-bounce keyframe sequence itself takes to play,
+  // below — `conferenceBubbling` only needs to stay `true` for this long
+  // before resetting; the keyframes already end back at scale 1 on their
+  // own, this is just bookkeeping so a second change mid-bounce starts
+  // clean rather than compounding onto an in-flight one.
+  const BUBBLE_DURATION_MS = 600;
   const bubbleTimeoutRef = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (colleagues.length === prevColleagueCountRef.current) return;
-    prevColleagueCountRef.current = colleagues.length;
+    // Per explicit bug report ("the double bounce animation only happens
+    // in the first instance when a conference call is created. Adding more
+    // participants does not trigger the animation") — root cause #2 (#1 was
+    // `callInstanceId`/the module-level Map above): React's `StrictMode`
+    // (on in this app — see main.tsx) deliberately double-invokes a mount's
+    // own effects in development — run, clean up, run again — specifically
+    // to catch effects that aren't safe to repeat. This effect USED to
+    // mark `prevColleagueCountRef`/the Map as "already seen" immediately,
+    // the moment it decided to schedule a bounce — so StrictMode's own
+    // sequence played out as: (1) run — detects the change, schedules a
+    // timeout, marks the count as seen; (2) cleanup — cancels that pending
+    // timeout; (3) run again — checks the SAME count, which the first run
+    // already marked as seen, so it silently does nothing. The bounce was
+    // scheduled once and then cancelled, forever. Fixed by deferring BOTH
+    // "mark this as seen" writes into the timeout's own callback, so they
+    // only actually happen once the bounce truly fires — the second
+    // (StrictMode) run then re-schedules a fresh timeout exactly like the
+    // first one did, instead of seeing stale "already handled" bookkeeping
+    // that was never actually acted on.
+    const nextCount = colleagues.length;
     bubbleTimeoutRef.current = window.setTimeout(() => {
+      prevColleagueCountRef.current = nextCount;
+      if (callInstanceId !== undefined) {
+        lastBouncedColleagueCountByCallInstance.set(callInstanceId, nextCount);
+      }
       setConferenceBubbling(true);
-      bubbleTimeoutRef.current = window.setTimeout(() => setConferenceBubbling(false), BUBBLE_GROW_MS);
+      bubbleTimeoutRef.current = window.setTimeout(() => setConferenceBubbling(false), BUBBLE_DURATION_MS);
     }, BUBBLE_DELAY_MS);
     return () => window.clearTimeout(bubbleTimeoutRef.current);
   }, [colleagues.length]);
@@ -1973,7 +2073,14 @@ export function VoiceCallControls({
         // absolutely-positioned overlay line, so it still wraps correctly
         // onto a second line if the roster ever gets long enough to need
         // one (an absolute full-width line behind everything would only
-        // connect pills on the SAME row).
+        // connect pills on the SAME row). This same flat shape turned out
+        // to matter again for a LATER follow-up too ("when a participant is
+        // removed, the remaining pills come together — animate that more
+        // fluidly"): `framer-motion`'s `AnimatePresence` can only track
+        // enter/exit on its own DIRECT children — a `React.Fragment`
+        // wrapping a pill + its connector (this render loop's previous
+        // shape) hides them from it. See the render loop below for how this
+        // list turns into `motion.span`s instead.
         const chips: { key: string; node: React.ReactNode }[] = [
           { key: "you", node: <ParticipantChip label="You" isSelf isOnHold={false} /> },
           {
@@ -2021,31 +2128,89 @@ export function VoiceCallControls({
         ];
         return (
           <div className="mb-2 flex flex-wrap items-center">
-            {chips.map((chip, i) => (
-              <React.Fragment key={chip.key}>
-                {i > 0 && (
-                  // Went `h-px` → `h-0.5` (bolder, per an earlier follow-up)
-                  // → back to `h-px` (per a further follow-up, "reduce the
-                  // border size and connecting lines' pixel size" — `h-0.5`
-                  // had gone too heavy alongside the pill's own border size).
-                  // Still visibly heavier than the thin subtle group-
-                  // boundary dividers elsewhere on this bar would be at this
-                  // same height, purely because of its color (see below),
-                  // not its thickness. Color is the same `color-mix()`-
-                  // lightened `border-strong` the pill's own border uses
-                  // (see that className's own doc comment, just above in
-                  // this file, for the full "why color-mix" reasoning) —
-                  // kept identical between the two on purpose, so a further
-                  // "lighten"/"darken" request to either one stays trivial
-                  // to apply to both in lockstep.
-                  <span
-                    aria-hidden="true"
-                    className="h-px w-4 shrink-0 self-center bg-[color-mix(in_srgb,var(--lyra-color-border-strong)_60%,transparent)]"
-                  />
-                )}
-                {chip.node}
-              </React.Fragment>
-            ))}
+            {/* `mode="popLayout"` (not the default) is what makes the
+                REMAINING pills actually slide together the moment one
+                exits, rather than snapping into place the instant it's
+                gone — per explicit follow-up request ("when a participant
+                is removed, the remaining participant pills come together.
+                Animate that more fluidly, rather than so quick"). In the
+                default mode, an exiting child stays IN normal layout flow
+                for the duration of its own exit animation, so every
+                sibling with `layout` only starts animating toward ITS new
+                position once the exiting one is finally removed — `popLay
+                out` instead pulls an exiting child out of flow immediately
+                (positioning it absolutely in place) so its own fade-out and
+                its siblings' `layout` reflow play at the same time, which
+                is the actual "pills come together" motion being asked for.
+                `initial={false}` keeps the FIRST render (an already-full
+                roster the instant this strip mounts) from replaying every
+                pill's own entrance animation — only a REAL subsequent
+                add/remove should animate. */}
+            <AnimatePresence initial={false} mode="popLayout">
+              {chips.flatMap((chip, i) => {
+                const connector =
+                  i > 0 ? (
+                    // Went `h-px` → `h-0.5` (bolder, per an earlier
+                    // follow-up) → back to `h-px` (per a further follow-up,
+                    // "reduce the border size and connecting lines' pixel
+                    // size" — `h-0.5` had gone too heavy alongside the
+                    // pill's own border size). Still visibly heavier than
+                    // the thin subtle group-boundary dividers elsewhere on
+                    // this bar would be at this same height, purely because
+                    // of its color (see below), not its thickness. Color is
+                    // the same `color-mix()`-lightened `border-strong` the
+                    // pill's own border uses (see that className's own doc
+                    // comment, just above in this file, for the full "why
+                    // color-mix" reasoning) — kept identical between the
+                    // two on purpose, so a further "lighten"/"darken"
+                    // request to either one stays trivial to apply to both
+                    // in lockstep. `layout` lets it slide to its new
+                    // position/width alongside the pills on either side of
+                    // it; a plain opacity fade (no scale — it's a thin line,
+                    // not a pill) covers its own entrance/exit.
+                    <motion.span
+                      key={`${chip.key}-connector`}
+                      layout
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.35, ease: "easeOut" }}
+                      aria-hidden="true"
+                      className="h-px w-4 shrink-0 self-center bg-[color-mix(in_srgb,var(--lyra-color-border-strong)_60%,transparent)]"
+                    />
+                  ) : null;
+                // `layout` is the actual FLIP animation — framer-motion
+                // measures this pill's position before/after whatever
+                // triggered the re-render and smoothly animates the
+                // difference, instead of letting the browser's own layout
+                // engine just snap it straight to the new spot. `initial`/
+                // `animate`/`exit` are the pill's OWN join/leave motion
+                // (scale+fade) — unchanged in FEEL from the prior, simpler
+                // CSS-class version, just now expressed as framer-motion
+                // variants so `AnimatePresence` can delay the real unmount
+                // until `exit` finishes playing. Went 0.3s (the original
+                // CSS version) → 0.5s (per "more fluidly, rather than so
+                // quick") → settled at 0.35s/`easeOut` per a further
+                // explicit follow-up ("the conference animation when
+                // participant is dropped can be faster, 500ms too slow") —
+                // still visibly smoother/slower than the original 0.3s
+                // snap, just not as deliberate as the 0.5s pass read.
+                const pill = (
+                  <motion.span
+                    key={chip.key}
+                    layout
+                    initial={{ opacity: 0, scale: 0.5 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.5 }}
+                    transition={{ duration: 0.35, ease: "easeOut" }}
+                    className="inline-flex"
+                  >
+                    {chip.node}
+                  </motion.span>
+                );
+                return connector ? [connector, pill] : [pill];
+              })}
+            </AnimatePresence>
             {showMerged && (
               <>
                 {/* Group-level action (Un-merge only now) — per explicit
@@ -2222,27 +2387,37 @@ export function VoiceCallControls({
                   // categorical-accent variants, same family "Merged call"
                   // already uses (`teal`) but a visually distinct hue, so
                   // the two multi-party tags don't read as the same color
-                  // family. Per a round of later explicit follow-ups
-                  // (full history on `conferenceBubbling`'s own doc comment
-                  // above — this went through a single ring, then two
-                  // staggered rings + a pop, before landing here): no ring
-                  // at all now — the Tag itself just scales up to 125% then
-                  // visibly settles back down to its normal size, delayed
-                  // half a second after the roster actually changes.
-                  // `transition-transform` is what makes BOTH halves of
-                  // that (grow, then shrink back) one continuous animation
-                  // off a single `scale-125` class toggle, rather than two
-                  // separately-authored keyframe steps.
-                  <Tag
-                    label="Conference"
-                    variant="purple"
-                    shape="pill"
-                    className={cn(
-                      "ml-2 shrink-0 transition-transform duration-200 ease-out",
-                      conferenceBubbling && "scale-125"
-                    )}
-                    icon={<Users className="h-3 w-3" strokeWidth={1.5} />}
-                  />
+                  // family. Per a round of later explicit follow-ups (full
+                  // history on `conferenceBubbling`'s own doc comment
+                  // above): a single grow-then-settle scale read as a
+                  // little flat ("a bit more lively ... like two bubbles so
+                  // it seems more organic"), so this is now a `framer-
+                  // motion` keyframe-array animation — two visible rebounds
+                  // (100% → 130% → 90% → 110% → 100%) instead of one smooth
+                  // ease — on a plain wrapping `motion.span` around the
+                  // otherwise-unchanged `Tag`, delayed half a second after
+                  // the roster actually changes. `animate`'s own value only
+                  // ever switches between a static `1` and the keyframe
+                  // array (never torn down mid-flight some other way), so
+                  // framer-motion always plays the full sequence once per
+                  // real `conferenceBubbling` flip rather than needing this
+                  // component to hand-manage individual animation steps.
+                  <motion.span
+                    className="ml-2 inline-flex shrink-0"
+                    animate={{ scale: conferenceBubbling ? [1, 1.3, 0.9, 1.1, 1] : 1 }}
+                    transition={{
+                      duration: BUBBLE_DURATION_MS / 1000,
+                      times: [0, 0.25, 0.5, 0.75, 1],
+                      ease: "easeInOut",
+                    }}
+                  >
+                    <Tag
+                      label="Conference"
+                      variant="purple"
+                      shape="pill"
+                      icon={<Users className="h-3 w-3" strokeWidth={1.5} />}
+                    />
+                  </motion.span>
                 )}
                 {/* Merged-call indicator — a Merge-Calls bridge (two fully
                     separate Interactions spliced together), distinct from
