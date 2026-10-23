@@ -2763,8 +2763,23 @@ export function VoiceCallControls({
               comment for why. */}
           {/* Left separator — see this slot's own doc comment just above
               for why it lives here (inside the centered flex item) rather
-              than at the slot boundary. */}
-          <span aria-hidden="true" className="h-4 w-px shrink-0 self-center bg-lyra-border-subtle" />
+              than at the slot boundary.
+
+              No longer visible (`bg-lyra-border-subtle` dropped) on EITHER
+              host — per two rounds of explicit follow-up report/screenshot
+              ("remove the vertical lines that appear in this group", then
+              "for above assignment tile, the vertical lines can be removed
+              also"): first removed for just the bottom bar (once its own
+              `mx-2` spacing fix, right separator below, already gave its
+              cluster a visible gap of its own), then for the left-nav/
+              above-assignments host too, once the SAME "lines are now
+              redundant clutter" verdict was extended to it. Kept as a
+              `shrink-0`-sized, zero-background `span` (not removed
+              outright) rather than deleting the element — it still
+              occupies the same `gap-1` slot either host's layout already
+              accounts for, so removing just the color keeps every other
+              spacing/wrap measurement in this row unchanged. */}
+          <span aria-hidden="true" className="h-4 w-px shrink-0 self-center" />
           {/* No more wrapping `Tooltip` on this or the next several
               controls — per later explicit follow-up request ("label the
               buttons again"), `WideCallControlButton`'s own label is now
@@ -3148,8 +3163,52 @@ export function VoiceCallControls({
               all voice controls") — this bar no longer owns any transcript-
               panel-toggle or call-volume concept at all; a caller that used
               to wire `onToggleTranscript`/`transcriptOpen` through now just
-              doesn't (see each page's own `<VoiceCallControls>` call site). */}
-          <span aria-hidden="true" className="h-4 w-px shrink-0 self-center bg-lyra-border-subtle" />
+              doesn't (see each page's own `<VoiceCallControls>` call site).
+
+              `mx-2` ONLY for the bottom bar's own wide/labeled rendering
+              (`mergeTrailingIntoCluster && !trailingControlsPlain` — true
+              only once the bottom-bar host turned `mergeTrailingIntoCluster`
+              on too, see that call site's own doc comment) — per explicit
+              follow-up report/screenshot ("increase the space between the
+              mute, video and end call buttons and the other buttons. The
+              intent is to balance the padding better"): the parent row's
+              plain `gap-1` (4px) read as the SAME tight spacing already
+              used BETWEEN Hold/Mask/Record/Keypad/Consult themselves, so
+              this divider sat almost flush against Mute right after it —
+              no visual beat between "the decorative cluster" and "the
+              controls that actually affect the call" groups, even though
+              they're conceptually distinct (same distinction the OTHER,
+              `trailingControlsPlain`-true left-nav host doesn't need extra
+              room for — its buttons are already icon-only and packed
+              tightly by design, see `mergeTrailingIntoCluster`'s own doc
+              comment, so this stays scoped to just the bottom bar rather
+              than widening that narrow card's cluster too). Added on BOTH
+              sides (`mx-2`, not `ml-2`) so Consult-to-divider gets the same
+              extra room as divider-to-Mute — one consistent gap on either
+              side of this one dividing line, not a lopsided gap only on
+              one side of it.
+
+              The line itself (`bg-lyra-border-subtle`) is now gone on
+              EITHER host, not just the bottom bar — per two rounds of
+              explicit follow-up report/screenshot ("remove the vertical
+              lines that appear in this group", then "for above assignment
+              tile, the vertical lines can be removed also"): first removed
+              only for the bottom bar (once its own `mx-2` fix, right here,
+              already gave that cluster real breathing room of its own),
+              then for the left-nav host too. `mx-2` itself stays gated to
+              `mergeTrailingIntoCluster && !trailingControlsPlain` (bottom
+              bar only) — that spacing fix was never about the line, and
+              the left-nav host's own tight `gap-1` packing is unaffected by
+              dropping just the color. See the LEFT separator's own doc
+              comment (just above, same slot's opening boundary) for the
+              identical reasoning applied there. */}
+          <span
+            aria-hidden="true"
+            className={cn(
+              "h-4 w-px shrink-0 self-center",
+              mergeTrailingIntoCluster && !trailingControlsPlain && "mx-2"
+            )}
+          />
           {/* `mergeTrailingIntoCluster` — see that prop's own doc comment —
               folds Mute/Add video/End Call into THIS SAME wrapping pool,
               right after Consult, instead of leaving them in their own

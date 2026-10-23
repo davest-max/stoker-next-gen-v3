@@ -11299,9 +11299,32 @@ export function AgentWorkspace2WithDeskPage({
               edges), 8px top padding only, and the same slide-up entrance
               animation — see `renderVoiceCallControls`'s own doc comment
               for why the actual prop list now lives there instead of here. */}
+          {/* `mergeTrailingIntoCluster` (3rd arg) — per explicit follow-up
+              report/screenshot ("there are views in a larger screen that
+              the voice controls at bottom get too spread apart... keep
+              the mute, video and end call buttons closer to the other
+              controls"): on a wide screen the decorative Hold-through-
+              Consult cluster centers itself in whatever space this bar
+              has (its own `justify-center` slot), while Mute/Add video/
+              End Call sit in a SEPARATE `shrink-0` slot pinned to the
+              bar's far right edge — the wider the window, the bigger the
+              gap between the two groups, exactly the "too far to move
+              the mouse" complaint. Passing `true` here folds Mute/Add
+              video/End Call into the SAME wrapping cluster as Hold-
+              through-Consult (see that prop's own doc comment,
+              agent-next-gen-voice-call-controls.tsx) — already built and
+              in use for the left-nav/above-assignments host's narrow
+              card for the same "don't spread these apart" reason, just
+              not previously turned on here. `trailingControlsPlain`
+              (2nd arg) stays unset — this bar keeps its full labeled
+              outline buttons/filled destructive "End Call" `Button`
+              regardless of width; only the GROUPING changes, not each
+              button's own look. */}
           {effectiveVoiceControlsPosition === "bottom" &&
             renderVoiceCallControls(
-              "bg-transparent px-0 pt-2 pb-0 animate-in slide-in-from-bottom-4 fade-in-0 duration-200"
+              "bg-transparent px-0 pt-2 pb-0 animate-in slide-in-from-bottom-4 fade-in-0 duration-200",
+              undefined,
+              true
             )}
 
           {/* Shared single-container panel — float (CSS transitions, not
