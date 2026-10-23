@@ -213,6 +213,12 @@ import {
 import { CollapsedChannelBadge } from "@/components/CollapsedChannelBadge";
 import { AddChannelAdHocButton } from "@/components/agent-next-gen-add-channel-button";
 import { VoiceCallControls } from "@/components/agent-next-gen-voice-call-controls";
+import {
+  getVoiceControlsPosition,
+  setVoiceControlsPosition,
+  type VoiceControlsPosition,
+} from "@/components/agent-next-gen-voice-controls-position";
+import { VoiceControlsPositionSetting } from "@/components/agent-next-gen-voice-controls-position-setting";
 import { MergedCallNavCard } from "@/components/agent-next-gen-merged-call-nav-card";
 // Per explicit request ("if I push the L button on the keyboard it
 // launches Marcus Webb's contact [in Premium] - do this for both Phase 1
@@ -2363,6 +2369,19 @@ export function AgentWorkspaceAdvancedPage({
      `onSettingsClick` handler, since there's only that one call site
      (unlike `setActiveInteractionId`, which has several). */
   const [showSettings, setShowSettings] = useState(false);
+
+  // Where `VoiceCallControls` actually renders for the currently-displayed
+  // live call — see agent-next-gen-voice-controls-position.ts's own doc
+  // comment for the full "why" and the persistence mechanism. Lazily
+  // seeded from storage (not a bare `useState("bottom")`) so a returning
+  // agent's prior choice takes effect from this page's very first render,
+  // not one render late. `setVoiceControlsPosition` (the persisting half)
+  // is called right alongside this state's own setter — see
+  // `VoiceControlsPositionSetting`'s own doc comment for why this page owns
+  // both instead of leaving the setting component to manage either.
+  const [voiceControlsPosition, setVoiceControlsPositionState] = useState<VoiceControlsPosition>(
+    () => getVoiceControlsPosition()
+  );
 
   // Per explicit follow-up request ("detach the contacts table from the
   // search panel and have it exist on its own") — a fourth top-level view
@@ -6678,6 +6697,129 @@ export function AgentWorkspaceAdvancedPage({
     </div>
   ) : null;
 
+  // Renders the SAME `<VoiceCallControls>` element regardless of which of
+  // the two host locations this app now supports it's rendering into (the
+  // bottom bar, or the left nav above the assignment list — see
+  // `voiceControlsPosition`'s own doc comment, near `showSettings`, for the
+  // full "why"). A parameterized FUNCTION — not a single pre-computed
+  // element reused in two spots — specifically so it's only ever invoked
+  // (and so only ever mounts) from whichever ONE call site is actually
+  // gated on by the current `voiceControlsPosition`; the other call site's
+  // own condition short-circuits before this is ever called, so exactly
+  // one real `VoiceCallControls` instance exists for a given call,
+  // regardless of which position is chosen. `extraClassName` is the one
+  // thing that genuinely differs between the two hosts (the bottom bar's
+  // own slide-up entrance vs. the left nav's plain fade-in) — every other
+  // prop is identical no matter where this ends up rendering.
+  //
+  // `effectiveVoiceControlsPosition` — per explicit "Change of direction"
+  // follow-up ("when [the left rail] collapses the controls are on top of
+  // other information when it persists or floats. Also conferencing UI is
+  // even more complication added to a limited space... when the left rail
+  // is collapsed, and when a conferencing call is created, the controls
+  // and the conferencing UI has to go back to the bottom of the screen.
+  // Forced to go there in those instances"): this FORCES "bottom" whenever
+  // the rail is collapsed OR the displayed call has more than one other
+  // party, regardless of the agent's own STORED `voiceControlsPosition`
+  // preference — a live override, not a change to that preference itself.
+  // `voiceControlsPosition` (and the Settings page's own radio button,
+  // which reads/writes it directly) stays exactly what the agent picked;
+  // only which value actually GATES the two render call sites below
+  // changes. Confirmed via follow-up Q&A: reverts automatically the
+  // instant both conditions clear (this is a plain derived value,
+  // recomputed every render — there's nothing to explicitly revert), and
+  // "a conferencing call" covers BOTH mechanisms that can put more than
+  // one other party on the line — the internal `Thread.colleagues`
+  // conference AND the separate Merge Calls bridge
+  // (`Interaction.mergedInteractionIds`) — not just one of the two. See
+  // `AgentWorkspace2WithDeskPage.tsx`'s identical derived value for the
+  // full doc comment (`!navOpen` vs. `isNavNarrow` reasoning included).
+  const hasConference =
+    !!displayedVoiceCallThread?.colleagues?.length ||
+    !!displayedVoiceCallInteraction?.mergedInteractionIds?.length;
+  const effectiveVoiceControlsPosition: VoiceControlsPosition =
+    !navOpen || isNavNarrow || hasConference ? "bottom" : voiceControlsPosition;
+  const renderVoiceCallControls = (
+    extraClassName: string,
+    trailingControlsPlain?: boolean,
+    mergeTrailingIntoCluster?: boolean,
+    rosterStacked?: boolean
+  ) => {
+    if (
+      !displayedVoiceCallInteraction ||
+      !displayedVoiceCallThread ||
+      (marcusWebbReviewing && displayedVoiceCallInteraction.id === MARCUS_WEBB_ID)
+    ) {
+      return null;
+    }
+    const interaction = displayedVoiceCallInteraction;
+    const thread = displayedVoiceCallThread;
+    return (
+      <VoiceCallControls
+        key={`${interaction.id}:${thread.id}`}
+        callInstanceId={`${interaction.id}:${thread.id}`}
+        className={extraClassName}
+        trailingControlsPlain={trailingControlsPlain}
+        mergeTrailingIntoCluster={mergeTrailingIntoCluster}
+        rosterStacked={rosterStacked}
+        // Per explicit request ("change the avatar from user to headset if
+        // the voice call is with an agent or skill") — applies regardless
+        // of which host is rendering this (bottom bar or left nav).
+        isAgentOrSkill={getMergeCandidateKind(interaction) !== "customer"}
+        conferenceOpen={conferenceOpen}
+        onConferenceOpenChange={handleConferenceOpenChange}
+        consultAnchorRef={consultAnchorRef}
+        onColleaguesChange={(next) => {
+          setInteractions((prev) =>
+            prev.map((i) =>
+              i.id === interaction.id
+                ? { ...i, threads: i.threads.map((c) => (c.id === thread.id ? { ...c, colleagues: next } : c)) }
+                : i
+            )
+          );
+        }}
+        initialColleagues={thread.colleagues}
+        onHangUp={() => {
+          setInteractions((prev) =>
+            prev.map((i) => (i.id === interaction.id ? { ...i, voiceCallEnded: true } : i))
+          );
+          setVoiceVideoWindowOpen(false);
+          setVoiceVideoFullScreen(false);
+          if (interaction.id === MARCUS_WEBB_ID) setMarcusWebbReviewing(false);
+        }}
+        mergedInteractions={(interaction.mergedInteractionIds ?? [])
+          .map((id) => interactions.find((i) => i.id === id))
+          .filter((i): i is Interaction => !!i)
+          .map((i) => ({
+            id: i.id,
+            name: i.customerName ?? "Unknown",
+            selectable: getMergeCandidateKind(i) === "customer",
+          }))}
+        onSelectMergedInteraction={switchActiveInteraction}
+        onUnmergeCalls={() => handleUnmergeCalls(interaction.id)}
+        onEndAllCalls={() => handleEndAllCalls(interaction.id)}
+        joinableCall={(() => {
+          const candidate = findJoinableLiveCall(interaction);
+          return candidate ? { id: candidate.id, name: candidate.customerName ?? "Unknown" } : undefined;
+        })()}
+        onJoinCall={(id) => handleJoinLiveCall(interaction.id, id)}
+        elapsedSeconds={clockTick - thread.startTick}
+        onToggleVideo={
+          isViewingLiveVoiceCallInteraction
+            ? () =>
+                setVoiceVideoWindowOpen((v) => {
+                  const next = !v;
+                  if (!next) setVoiceVideoFullScreen(false);
+                  return next;
+                })
+            : undefined
+        }
+        videoOpen={isViewingLiveVoiceCallInteraction && voiceVideoWindowOpen}
+        customerLabel={interaction.customerName ?? thread.addressLabel ?? thread.value ?? interaction.id}
+      />
+    );
+  };
+
   return (
     <div className="flex flex-col h-screen bg-lyra-bg-surface-shell overflow-hidden animate-in fade-in-0 duration-500">
 
@@ -7167,6 +7309,58 @@ export function AgentWorkspaceAdvancedPage({
           }
           header={
             <>
+              {/* Voice call controls — the OTHER of the two host locations
+                  `voiceControlsPosition` can pick (see that state's own doc
+                  comment, and `renderVoiceCallControls`'s own doc comment
+                  for the shared-element reasoning). Deliberately NOT gated
+                  on `navOpen` itself (unlike the empty-state message right
+                  below, which IS) — per explicit request ("the voice
+                  controls need to stay open even if the left rail is
+                  collapsed... the voice controls are independent of the
+                  left rail"): an agent needs quick access to Hold/Mute/End
+                  Call regardless of rail state. In practice this only ever
+                  renders while the rail IS expanded anyway, since
+                  `effectiveVoiceControlsPosition` (its own doc comment)
+                  forces `"bottom"` the instant the rail collapses — this
+                  condition just mirrors that derived value rather than
+                  re-deriving "is the rail actually usable right now" here
+                  too.
+
+                  Renders directly in normal flow as `header`'s first child
+                  — no floating/draggable panel. An earlier pass built a
+                  `position: fixed`, `Draggable`-wrapped floating card here
+                  (to dodge the nav list's own `overflow-x-hidden` clip and
+                  to survive the rail being collapsed to its narrow icon
+                  width) — removed per explicit follow-up ("with these
+                  changes, the draggable or floating voice controls is not
+                  relevant. remove that feature and have the voice controls
+                  above assignment list truly within the left rail"): now
+                  that this never has to render while the rail is
+                  collapsed/narrow (the forced-bottom override above
+                  already handles that case), there's no proportions/
+                  clipping problem left for a float to solve, so it just
+                  sits inline like any other rail content instead — pushing
+                  the assignment cards below it down, scrolling with them,
+                  no separate anchor/measurement machinery needed.
+                  `trailingControlsPlain`/`mergeTrailingIntoCluster`/
+                  `rosterStacked` (2nd–4th args) stay on regardless — the
+                  rail's own content width here is just as narrow as the
+                  old floating card was, so the same compact layout still
+                  applies; see each prop's own doc comment
+                  (agent-next-gen-voice-call-controls.tsx) for what each
+                  one does. The `rounded-lyra-sm border` + `mb-3` in the
+                  className below is this component's own normal card look
+                  (previously supplied by the now-removed `Draggable`
+                  wrapper's own border/shadow), so it still reads as a
+                  distinct card sitting above the assignment list rather
+                  than bleeding into it. */}
+              {effectiveVoiceControlsPosition === "aboveAssignments" &&
+                renderVoiceCallControls(
+                  "rounded-lyra-sm border border-lyra-border-subtle px-3 py-2 mb-3 animate-in fade-in-0 duration-200",
+                  true,
+                  true,
+                  true
+                )}
               {/* Per explicit request ("add a message and icon into the left
                   nav when there are no assignments indicating that the
                   agent's assignment queue is empty") — only while expanded;
@@ -8015,7 +8209,15 @@ export function AgentWorkspaceAdvancedPage({
                 // this extra nesting level is layout-inert.
                 <div key="settings" className="flex flex-1 flex-col min-w-0 overflow-hidden animate-in fade-in-0 duration-200">
                   {showPageHeader && <PageHeader title="Settings" />}
-                  <div className="flex-1 overflow-y-auto" />
+                  <div className="flex-1 overflow-y-auto p-6">
+                    <VoiceControlsPositionSetting
+                      value={voiceControlsPosition}
+                      onValueChange={(next) => {
+                        setVoiceControlsPositionState(next);
+                        setVoiceControlsPosition(next);
+                      }}
+                    />
+                  </div>
                 </div>
               ) : showAllContacts && !activeInteraction ? (
                 // ── All Contacts — standalone, detached view. Per explicit
@@ -10713,225 +10915,32 @@ export function AgentWorkspaceAdvancedPage({
           {/* Voice call controls — per explicit follow-up request ("move
               the call controls below the main container so if a user
               navigates to home/settings while on a call the controls of
-              the current call stay visible"): used to render nested inside
-              the active-interaction branch's own content column, in the
-              same `shrink-0` slot `InteractionComposer` occupies for a chat
-              channel (see that branch's own doc comment for where this
-              used to live) — that whole branch (and everything inside it)
-              unmounts the instant the agent navigates to Settings/Home,
-              which is exactly the reported bug. Rendered here instead, as
+              the current call stay visible"): rendered here, as
               `Container`'s own sibling, this bar no longer lives or dies
-              with whichever top-level view (Settings/All Contacts/an
-              active interaction/the Desk dashboard — the mutually-
-              exclusive branches `Container` switches between) happens to
-              be showing, so a live call now stays visible under all of
-              them.
-
-              Gated on `liveVoiceCallThread` (see its own doc comment
-              above) instead of `activeInteraction`/`activeChannelType` —
-              this is the one substantive behavior change that comes with
-              the reposition, not just a cosmetic move: `activeInteraction`
-              itself goes `null` on every Home/Settings nav click
-              (`switchActiveInteraction(null)`, LeftNav's own `footer`
-              items below), so gating on it here would have made the
-              reposition a no-op — the bar would still have vanished the
-              moment the agent actually navigated away, just from a
-              different-looking spot. `liveVoiceCallThread` is derived
-              straight from `interactions` itself, which `switchActive-
-              Interaction` never touches, so it keeps resolving to the
-              right call regardless of which interaction (if any) is
-              currently "active."
-
-              Per explicit follow-up request, this ONLY repositions the
-              existing single-call bar — it does NOT add any hold/multi-
-              call handling. `onHangUp`/`elapsedSeconds` below now read off
-              `liveVoiceCallInteraction`/`liveVoiceCallThread` rather than
-              `activeInteraction`/`activeChannel` (so hanging up or the
-              running timer still target the right call once it's no
-              longer the active one); `onToggleTranscript`/`onToggleVideo`
-              stay wired to `sidePanelOpen`/the video window exactly as
-              before, but ONLY while `isViewingLiveVoiceCallInteraction` —
-              both are page-level UI that belongs to whichever interaction
-              is currently ON SCREEN, not to whichever one happens to have
-              the live call, and those can now be two different
-              interactions. Left `undefined` (hides each button outright,
-              same pattern every other optional callback on this shared
-              component already follows) rather than wiring them to act on
-              the wrong interaction's panel/video window, or against no
-              interaction at all.
-
-              While `marcusWebbReviewing` is on, this whole page-level bar
-              is hidden outright (no `VoiceCallControls`, and no substitute
-              either) — per explicit follow-up request ("we need to move
-              the action bar to inside the container b/c it should not be
-              viewable when the user in on other pages"): the "Reviewing
-              this conversation" `ActionBar` used to render right here, as
-              this same page-level sibling, which meant it kept showing no
-              matter which interaction (or Settings/Home) the agent had
-              actually navigated to — exactly the persistence this comment
-              praises for a real live call is wrong for "reviewing," which
-              should only be visible while actually looking at that one
-              interaction. It's moved to that interaction's own content
-              column instead (`activeInteraction.id === MARCUS_WEBB_ID &&
-              marcusWebbReviewing`, right where `InteractionComposer` would
-              sit for a chat channel — see that composer's own doc comment
-              for the "why nothing renders there for voice today" this
-              reuses). */}
-          {displayedVoiceCallInteraction &&
-          displayedVoiceCallThread &&
-          !(marcusWebbReviewing && displayedVoiceCallInteraction.id === MARCUS_WEBB_ID) ? (
-            <VoiceCallControls
-              // Per explicit follow-up request/reference screenshot, now
-              // that this bar sits directly on the page background instead
-              // of at the bottom of the transcript column: overrides this
-              // component's own default `bg-lyra-bg-surface-base px-4
-              // py-2` (wide) / `px-2 py-2` (compact) — both branches share
-              // one root node (see that node's own doc comment,
-              // agent-next-gen-voice-call-controls.tsx), so this one
-              // `className` reaches whichever is currently showing. No
-              // white card background, no left/right inset (flush with
-              // `Container`'s own edges), 8px top padding only (was 8px on
-              // every side) — `pt-2 pb-0` (not `py-0`) so top and bottom
-              // can differ; `cn`'s own tailwind-merge cleanly drops the
-              // conflicting defaults for all four (background + all three
-              // padding axes) rather than fighting them. `animate-in
-              // slide-in-from-bottom-4 fade-in-0 duration-200` per explicit
-              // follow-up request ("animate up the call controls / action
-              // bar when they are instantiated") — tailwindcss-animate's own
-              // entrance utilities, replaying every time this mounts fresh
-              // (a real call starting, `marcusWebbReviewing` switching back
-              // to `false`, OR — per later explicit follow-up — switching
-              // to a genuinely DIFFERENT live call via the `key` below).
-              //
-              // `key`: forces a clean remount (fresh mute/hold/conference/
-              // consult state) whenever the UNDERLYING call this bar shows
-              // actually changes, without remounting just for navigating
-              // away from and back to the SAME call — see
-              // `displayedVoiceCallInteraction`'s own doc comment above.
-              key={`${displayedVoiceCallInteraction.id}:${displayedVoiceCallThread.id}`}
-              // Same identity as the `key` just above, passed through as a
-              // real prop too — see `VoiceCallControlsProps.callInstanceId`'s
-              // own doc comment for why ("the double bounce animation only
-              // happens in the first instance... adding more participants
-              // does not trigger the animation").
-              callInstanceId={`${displayedVoiceCallInteraction.id}:${displayedVoiceCallThread.id}`}
-              className="bg-transparent px-0 pt-2 pb-0 animate-in slide-in-from-bottom-4 fade-in-0 duration-200"
-              conferenceOpen={conferenceOpen}
-              onConferenceOpenChange={handleConferenceOpenChange}
-              consultAnchorRef={consultAnchorRef}
-              // Per explicit follow-up request ("show all participant names
-              // in the assignment card also with a similar 'conference'
-              // icon") — onto `Thread.colleagues` (see that field's own doc
-              // comment, agent-next-gen-interaction-dashboard.tsx). This
-              // page never lifted Hold the same way DeskPage did (see
-              // `displayedVoiceCallInteraction`'s own doc comment above —
-              // "not the hold state yet"), but colleagues is independent of
-              // that and needed on both pages equally.
-              onColleaguesChange={(next) => {
-                setInteractions((prev) =>
-                  prev.map((i) =>
-                    i.id === displayedVoiceCallInteraction.id
-                      ? {
-                          ...i,
-                          threads: i.threads.map((c) =>
-                            c.id === displayedVoiceCallThread.id ? { ...c, colleagues: next } : c
-                          ),
-                        }
-                      : i
-                  )
-                );
-              }}
-              // Seeds this bar's own local `colleagues` state back from the
-              // exact same persisted field `onColleaguesChange` just above
-              // writes to — fixes a confirmed bug ("when I merged another
-              // customer into an existing conference, the conference call
-              // seemed to end, and kicked out the conferencing agent"): see
-              // `initialColleagues`'s own doc comment (agent-next-gen-
-              // voice-call-controls.tsx) for the full root cause.
-              initialColleagues={displayedVoiceCallThread.colleagues}
-              onHangUp={() => {
-                setInteractions((prev) =>
-                  prev.map((i) =>
-                    i.id === displayedVoiceCallInteraction.id ? { ...i, voiceCallEnded: true } : i
-                  )
-                );
-                setVoiceVideoWindowOpen(false);
-                setVoiceVideoFullScreen(false);
-                // A call that's ended should never leave `marcusWebbReviewing`
-                // stuck `true` for next time — see that state's own doc
-                // comment (above, with the rest of the Marcus Webb state).
-                if (displayedVoiceCallInteraction.id === MARCUS_WEBB_ID) setMarcusWebbReviewing(false);
-              }}
-              mergedInteractions={(displayedVoiceCallInteraction.mergedInteractionIds ?? [])
-                .map((id) => interactions.find((i) => i.id === id))
-                .filter((i): i is Interaction => !!i)
-                .map((i) => ({
-                  id: i.id,
-                  name: i.customerName ?? "Unknown",
-                  selectable: getMergeCandidateKind(i) === "customer",
-                }))}
-              onSelectMergedInteraction={switchActiveInteraction}
-              onUnmergeCalls={() => handleUnmergeCalls(displayedVoiceCallInteraction.id)}
-              onEndAllCalls={() => handleEndAllCalls(displayedVoiceCallInteraction.id)}
-              // "Join live call" shortcut in the Consult/Transfer popover —
-              // see `findJoinableLiveCall`'s own doc comment for the exact
-              // customer+agent/skill-pair scope this covers, and each
-              // `onMergeCalls` call site's own comment for the kebab entry
-              // this intentionally overlaps with/replaces for that one case.
-              joinableCall={(() => {
-                const candidate = findJoinableLiveCall(displayedVoiceCallInteraction);
-                return candidate
-                  ? { id: candidate.id, name: candidate.customerName ?? "Unknown" }
-                  : undefined;
-              })()}
-              onJoinCall={(id) => handleJoinLiveCall(displayedVoiceCallInteraction.id, id)}
-              elapsedSeconds={clockTick - displayedVoiceCallThread.startTick}
-              onToggleTranscript={
-                isViewingLiveVoiceCallInteraction
-                  ? () => {
-                      if (sidePanelOpen && customerPanelActiveTab === "Transcript") {
-                        setSidePanelOpen(false);
-                      } else {
-                        setCustomerPanelActiveTab("Transcript");
-                        setSidePanelOpen(true);
-                      }
-                    }
-                  : undefined
-              }
-              transcriptOpen={isViewingLiveVoiceCallInteraction && sidePanelOpen && customerPanelActiveTab === "Transcript"}
-              onToggleVideo={
-                isViewingLiveVoiceCallInteraction
-                  ? () =>
-                      setVoiceVideoWindowOpen((v) => {
-                        const next = !v;
-                        if (!next) setVoiceVideoFullScreen(false);
-                        return next;
-                      })
-                  : undefined
-              }
-              videoOpen={isViewingLiveVoiceCallInteraction && voiceVideoWindowOpen}
-              // Per explicit follow-up request/reference screenshot ("add
-              // the customer avatar. Add the name / number/email above the
-              // timer"): same fallback order `activeUnknownContactIdentifier`
-              // above already uses for "whatever we can display for this
-              // customer" — a real name first, then the human-readable
-              // address, then the raw dialed/typed value, then this card's
-              // own stable id as the last resort (there's always SOME
-              // string). `customerInitials` is intentionally left unpassed
-              // here — deriving real initials would duplicate lyra-ui's own
-              // unexported `getInitials` (interaction-nav-item.tsx) rather
-              // than reuse it, so for now every live call shows the generic
-              // white `Plus` fallback glyph the component already falls
-              // back to without it, matching the reference screenshot's own
-              // unmatched-quickdial-number example.
-              customerLabel={
-                displayedVoiceCallInteraction.customerName ??
-                displayedVoiceCallThread.addressLabel ??
-                displayedVoiceCallThread.value ??
-                displayedVoiceCallInteraction.id
-              }
-            />
-          ) : null}
+              with whichever top-level view happens to be showing, so a
+              live call stays visible under all of them. Per a later
+              explicit request ("a user can define whether the voice
+              controls appear at the bottom of the screen as it is now, or
+              choose to have them appear above the assignment cards"): this
+              is now ONE of the two possible host locations
+              (`effectiveVoiceControlsPosition === "bottom"`) — see
+              `renderVoiceCallControls`'s own doc comment (above, right
+              before this component's main `return`) for the shared-
+              element/no-duplication reasoning and the full prop list, and
+              the left nav's own `header` prop (`LeftNav`, below) for the
+              other host location. Both call sites gate on
+              `effectiveVoiceControlsPosition`, not the raw stored
+              `voiceControlsPosition` — see that derived value's own doc
+              comment for the rail-collapsed/conference forced-bottom
+              override this adds on top of the agent's own preference.
+              While `marcusWebbReviewing` is on, neither host renders this
+              bar at all (see `renderVoiceCallControls`'s own early-return)
+              — the "Reviewing this conversation" `ActionBar` lives in that
+              interaction's own content column instead. */}
+          {effectiveVoiceControlsPosition === "bottom" &&
+            renderVoiceCallControls(
+              "bg-transparent px-0 pt-2 pb-0 animate-in slide-in-from-bottom-4 fade-in-0 duration-200"
+            )}
 
           {/* Shared single-container panel — float (CSS transitions, not
               keyframe animations — avoids compositor fill-mode flash).

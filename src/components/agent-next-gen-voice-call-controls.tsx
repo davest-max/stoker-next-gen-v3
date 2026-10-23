@@ -41,10 +41,11 @@
 // ambient flex stretch — no `max-w`/`mx-auto` cap) instead of only kicking
 // in below a measured breakpoint. Below, every main control still drops its
 // visible label for a hover/focus `Tooltip` (`CompactCallControlButton`),
-// the timer still shows its "MM:SS" digits next to a Clock icon, and
-// Volume/Transcript still trail in their own leading/trailing flex slots —
+// and the timer still shows its "MM:SS" digits next to a Clock icon —
 // none of that content changed, only the "which rendering, and how wide"
-// logic around it. `stretch` stays as an accepted prop (default `false`)
+// logic around it (Volume/Transcript were removed outright in a later
+// pass — per explicit request, this bar no longer owns either concept at
+// all). `stretch` stays as an accepted prop (default `false`)
 // purely so Phase 1/Phase 2's existing call sites don't need to change
 // their JSX — it no longer affects anything rendered here.
 //
@@ -108,7 +109,6 @@ import { cn } from "@/lib/utils";
 import {
   Button,
   Popover,
-  Slider,
   Spinner,
   Tooltip,
   TabList,
@@ -117,6 +117,8 @@ import {
   ActionIconButton,
   Tag,
   SearchInput,
+  useScrollChevrons,
+  ScrollChevronButton,
 } from "@nicecxone/lyra-ui";
 import { CREATE_NEW_AGENTS } from "@nicecxone/lyra-ui/agents-data";
 import {
@@ -132,9 +134,6 @@ import {
   VideoOff,
   PhoneOff,
   Clock,
-  Volume2,
-  VolumeX,
-  FileText,
   User,
   Check,
   X,
@@ -159,8 +158,8 @@ import { TransferIcon } from "@/components/agent-next-gen-transcript";
  *  Built with `React.forwardRef` and a `...rest` spread — same reasoning as
  *  `CompactCallControlButton`'s own doc comment just below gives for why
  *  that one needs it: this button has to compose correctly as either a
- *  `Popover`'s trigger child (Keypad/Volume both clone their own
- *  click/ref/aria-* props onto their immediate child via Radix's
+ *  `Popover`'s trigger child (Keypad clones its own
+ *  click/ref/aria-* props onto its immediate child via Radix's
  *  `asChild`/`Slot`) or a plain button with native attributes
  *  (`disabled` on Record) — a fixed named-prop list would silently drop
  *  whichever of those it didn't explicitly declare. `label` itself no
@@ -226,7 +225,7 @@ const WideCallControlButton = React.forwardRef<
 WideCallControlButton.displayName = "WideCallControlButton";
 
 /** Plain 40×40px icon-only button — the icon-only
- *  rendering of Hold/Mask/Record/Keypad/Transcript/Volume/Mute/Add video/
+ *  rendering of Hold/Mask/Record/Keypad/Consult/Mute/Add video/
  *  End Call once this bar's own measured width drops below the relevant
  *  breakpoint (`controlsCompact`/`controlsIconOnly`, this file's own top
  *  doc comment). `label` is still required on most call sites, it's just
@@ -280,7 +279,7 @@ const CompactCallControlButton = React.forwardRef<
      * buttons"): lets Mute/Video opt into `Button`'s real `"outline"`
      * variant (a bordered, `bg-lyra-bg-control` surface) instead of this
      * component's own default `"ghost"` (transparent until hover) — every
-     * other control here (Hold/Mask/Record/Keypad/Transcript) omits this
+     * other control here (Hold/Mask/Record/Keypad/Consult) omits this
      * and keeps the existing plain `ghost` look unchanged. The `active`/
      * `critical`/`strong` tint classes above are unaffected either way —
      * they already override `outline`'s own default `bg`/`text` tokens via
@@ -867,6 +866,7 @@ function ParticipantChip({
   onSelect,
   selected,
   kind,
+  className,
 }: {
   label: string;
   isSelf?: boolean;
@@ -903,6 +903,16 @@ function ParticipantChip({
    *  group's. Omitted (plain neutral avatar) for "You"/the primary
    *  customer, which aren't part of either group. */
   kind?: "colleague" | "merged";
+  /** Per explicit follow-up request ("need to be able to see all parties
+   *  rather than a horizontal scroll. Likely stacking"): the floating/
+   *  narrow-width roster (`VoiceCallControls`'s own `rosterStacked` mode)
+   *  stretches each pill to the FULL width of its single-column stack
+   *  (`w-full`) instead of this pill's own default content-hugging
+   *  `shrink-0` — passed straight through to the root `cn()` merge, same
+   *  "caller can override, component doesn't need to know why" pattern
+   *  every other `className` prop in this file already follows. Omit to
+   *  keep the default horizontal-strip sizing (every other call site). */
+  className?: string;
 }) {
   const canExpand = !!onToggleHold || !!onTransfer || !!onHangUp;
   const [confirming, setConfirming] = useState(false);
@@ -951,7 +961,8 @@ function ParticipantChip({
         // consistent color even as their relative WEIGHT has changed a few
         // times.
         "flex h-10 shrink-0 items-center gap-2.5 rounded-full border border-[color-mix(in_srgb,var(--lyra-color-border-strong)_60%,transparent)] bg-lyra-bg-surface-base pl-1.5 pr-3",
-        selected && "bg-lyra-status-info-subtle"
+        selected && "bg-lyra-status-info-subtle",
+        className
       )}
     >
       <span
@@ -1072,130 +1083,6 @@ function ParticipantChip({
   );
 }
 
-/** The collapsed volume trigger — compact rendering only (see this file's
- *  own top doc comment for why the wide rendering keeps its own separate
- *  icon instead). A single icon button (the live volume glyph, same
- *  `Volume2`/`VolumeX` swap the wide trigger uses) opens a small popover
- *  holding just the volume slider.
- *
- *  Per explicit follow-up request ("take the transcript button out of the
- *  volume dropdown and put it to the left of the volume button"): this used
- *  to also fold a "Show/Hide transcript" row into this same popover
- *  (`CompactVolumeAndTranscriptButton`, see this file's own git history) —
- *  transcript is back to being its own separate `WideCallControlButton`
- *  (was `CompactCallControlButton` — see this file's own top doc comment
- *  for that later rename-in-place) at this component's own call site
- *  instead, so this trigger is volume-only again.
- *
- *  `volume`/`onVolumeChange` are lifted to the OUTER `VoiceCallControls`
- *  component rather than local state here — see this file's own top doc
- *  comment for why (the value has to survive a resize back across the
- *  breakpoint into the wide rendering's own separate volume trigger). */
-function CompactVolumeButton({
-  volume,
-  onVolumeChange,
-  disabled,
-  compact,
-}: {
-  volume: number;
-  onVolumeChange: (volume: number) => void;
-  /** Per explicit request ("when end call is clicked ... disable the
-   *  other buttons at the same time"): disables the trigger itself
-   *  (forwarded to `WideCallControlButton` below, same as every other
-   *  control in this bar) and forces the popover closed/unopenable rather
-   *  than leaving an already-open volume slider live while the call is
-   *  hanging up — same "force off a conflicting open state" convention
-   *  the Mask/Record pair above already follows. */
-  disabled?: boolean;
-  /** Mirrors `VoiceCallControls`'s own `controlsCompact` (see that file's
-   *  top doc comment / `CompactCallControlButton`'s) — swaps this trigger
-   *  from `WideCallControlButton` to the icon-only 40px
-   *  `CompactCallControlButton` below the 991px breakpoint, same as every
-   *  other control in the centered cluster. Uses a native `title` rather
-   *  than `Tooltip` for the same reason Keypad's own call site does — see
-   *  that comment. */
-  compact?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    // No more wrapping `Tooltip` — per later explicit follow-up request
-    // ("label the buttons again"), the trigger below is now a labeled
-    // `WideCallControlButton` (visible "Volume" text) rather than the old
-    // hand-rolled icon-only `<button>` a hover `Tooltip` used to be the
-    // only way to name, so there's nothing left for a tooltip to add here.
-    // `Popover`'s trigger still clones its own click/ref/aria props onto
-    // its immediate child via Radix's `asChild`/`Slot` mechanism — that's
-    // exactly what `WideCallControlButton`'s own `forwardRef`+`...rest`
-    // are for (see that component's own doc comment).
-    <Popover
-      open={open && !disabled}
-      onOpenChange={(next: boolean) => {
-        if (!disabled) setOpen(next);
-      }}
-      placement="top"
-      content={
-        <div className="flex items-center gap-2 p-3 w-[200px]">
-          <button
-            type="button"
-            onClick={() => onVolumeChange(volume === 0 ? 70 : 0)}
-            aria-label={volume === 0 ? "Unmute" : "Mute"}
-            className="shrink-0 text-lyra-fg-secondary hover:text-lyra-fg-default"
-          >
-            {volume === 0 ? (
-              <VolumeX className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
-            ) : (
-              <Volume2 className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
-            )}
-          </button>
-          <Slider
-            value={volume}
-            onChange={onVolumeChange}
-            min={0}
-            max={100}
-            step={1}
-            showTicks={false}
-            label="Call volume"
-            className="flex-1 min-w-0 [&>label]:sr-only"
-          />
-        </div>
-      }
-    >
-      {compact ? (
-        <CompactCallControlButton
-          icon={
-            volume === 0 ? (
-              <VolumeX className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
-            ) : (
-              <Volume2 className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
-            )
-          }
-          active={open}
-          disabled={disabled}
-          aria-label="Volume"
-          title="Volume"
-          aria-pressed={open}
-        />
-      ) : (
-        <WideCallControlButton
-          icon={
-            volume === 0 ? (
-              <VolumeX className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
-            ) : (
-              <Volume2 className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
-            )
-          }
-          label="Volume"
-          active={open}
-          disabled={disabled}
-          aria-label="Volume"
-          aria-pressed={open}
-        />
-      )}
-    </Popover>
-  );
-}
-
 export interface VoiceCallControlsProps {
   /** Ends the call — the caller closes this channel (same as picking
    *  "Closed" from the status popover). The only real, non-decorative
@@ -1219,24 +1106,6 @@ export interface VoiceCallControlsProps {
    *  control bar"). Omit (or while `onHold` is false) to show the plain
    *  "Hold"/"Resume" label exactly as before. */
   heldElapsedSeconds?: number;
-  /**
-   * Opens/closes the call transcript `InteriorPanel` the caller renders
-   * alongside the transcript/composer column (see each tier page's own
-   * "Voice call controls" render site) — this bar has no panel of its own
-   * to show, it just tells the caller to toggle theirs, same "this
-   * component doesn't own interaction-level state" split every other real
-   * (non-decorative) callback here already follows. Its own separate icon
-   * both above AND below the 768px breakpoint (see `CompactVolumeButton`'s
-   * own doc comment for why this is no longer folded into that trigger).
-   * Omit to hide the transcript trigger entirely, e.g. for a caller that
-   * hasn't wired a panel through yet.
-   */
-  onToggleTranscript?: () => void;
-  /** Whether the caller's transcript panel is currently open — tints
-   *  whichever transcript trigger is currently showing (wide or compact)
-   *  the same active blue every other toggled-on control in this bar
-   *  (Hold/Mute/Mask/Record) already uses. */
-  transcriptOpen?: boolean;
   /**
    * Opens/closes the small draggable video window (a `DraggablePanel`) the
    * caller renders elsewhere in the page — replaces this button's old
@@ -1388,6 +1257,16 @@ export interface VoiceCallControlsProps {
    *  screenshot's unmatched-quickdial-number case (see this file's own top
    *  doc comment). */
   customerInitials?: string;
+  /** Per explicit request ("change the avatar from user to headset if the
+   *  voice call is with an agent or skill"): swaps the avatar's fallback
+   *  glyph (shown whenever `customerInitials` isn't set) from the generic
+   *  `User` outline to the same `Headset` glyph `ParticipantChip`'s own
+   *  `isInternalAgent` avatar already uses for an internal colleague — one
+   *  consistent "this is a person on staff, not a customer" signal across
+   *  both surfaces. Ignored while `customerInitials` is set (a real contact
+   *  match always shows initials regardless of kind) or while
+   *  `customerLabel` itself is unset (no avatar renders at all then). */
+  isAgentOrSkill?: boolean;
   /** Every OTHER Interaction currently bridged with this call via "Merge
    *  Calls" (resolved by the caller from `Interaction.mergedInteractionIds`
    *  — see that field's own doc comment, agent-next-gen-interaction-
@@ -1450,6 +1329,60 @@ export interface VoiceCallControlsProps {
    *  either. */
   onJoinCall?: (interactionId: string) => void;
   className?: string;
+  /** Strips the outline border + background off Mute/Add video/End Call
+   *  (the trailing "dark" cluster) — per explicit request ("remove the
+   *  icon button outlines and background of the mute, video, end call so
+   *  they fit better when in the 'above assignment list' view. Only for
+   *  this view."): the left nav's own `voiceControlsPosition ===
+   *  "aboveAssignments"` host (each page's own `renderVoiceCallControls`
+   *  call site) passes this `true`; the bottom bar's own call site omits
+   *  it, leaving that rendering exactly as it's always been — Mute/Add
+   *  video keep their bordered `variant="outline"` look and End Call keeps
+   *  its solid-red filled `Button`. Only touches the icon-only
+   *  (`controlsIconOnly`) rendering of these three controls — the left nav
+   *  host is always narrow enough that the wide/labeled branches never
+   *  render there anyway, so there's nothing to change on those. End Call
+   *  specifically swaps from a real `Button variant="destructive"` to the
+   *  SAME plain `CompactCallControlButton` (`critical`) every other
+   *  control here already uses — red TEXT on hover/press, no solid fill —
+   *  rather than just stripping classes off the `Button`, since a filled
+   *  destructive `Button` has no "outline-less, background-less" variant
+   *  of its own to fall back to. */
+  trailingControlsPlain?: boolean;
+  /** Folds Mute/Add video/End Call into the SAME wrapping row as Hold/Mask/
+   *  Record/Keypad/Consult, right after Consult, instead of keeping them in
+   *  their own separate trailing cluster — per explicit request ("move the
+   *  mute, video, end call buttons to the second row next to the consult/
+   *  transfer icon. The intent is to reduce height of the component"): in
+   *  the left nav's narrow floating host (see `trailingControlsPlain`'s own
+   *  doc comment for that host), the decorative cluster and the trailing
+   *  cluster are each their OWN flex-wrap box — two separate wrapping pools
+   *  — so even when there's visibly empty room at the end of Consult's own
+   *  row, Mute/Add video/End Call can never flow onto it; they always start
+   *  a fresh row in their own box, one control per row at this host's
+   *  narrow width, which read as needlessly tall. This prop merges all
+   *  eight controls into ONE shared wrapping pool (no behavior/styling
+   *  change to the buttons themselves — purely which box they're a child
+   *  of), so they pack together row by row instead. The bottom bar's own
+   *  call site omits this — its centered-decorative/anchored-right-dark
+   *  two-cluster layout (this file's own top doc comment) is unaffected. */
+  mergeTrailingIntoCluster?: boolean;
+  /** Switches the roster/participant-chip strip (You/customer/colleagues/
+   *  bridged customers) from its default horizontally-scrollable single row
+   *  to a vertical stack, one pill per row — per explicit follow-up request
+   *  ("need to be able to see all parties rather than a horizontal scroll.
+   *  Likely stacking"): the left nav's own floating host is narrow enough
+   *  that a horizontal scroll strip there hides everyone but the pill(s)
+   *  currently in view, which is wrong for a SMALL, FIXED roster an agent
+   *  needs to see all of at a glance — a materially different situation
+   *  from `rosterScrollRef`'s own doc comment's reasoning for why
+   *  horizontal scroll is fine for the WIDE bottom bar (an open-ended list
+   *  of people, plenty of width to show several before scrolling is ever
+   *  needed). The connector between pills rotates from a horizontal line
+   *  to a vertical one to match; each pill stretches to the stack's full
+   *  width (`ParticipantChip`'s own `className` prop) instead of staying
+   *  content-sized. The bottom bar's own call site omits this. */
+  rosterStacked?: boolean;
 }
 
 // Module-level (NOT component state) — survives this bar's own remounts on
@@ -1472,8 +1405,6 @@ export function VoiceCallControls({
   onHangUp,
   elapsedSeconds,
   heldElapsedSeconds,
-  onToggleTranscript,
-  transcriptOpen,
   onToggleVideo,
   videoOpen,
   onHold: onHoldControlled,
@@ -1488,6 +1419,7 @@ export function VoiceCallControls({
   stretch = false,
   customerLabel,
   customerInitials,
+  isAgentOrSkill,
   mergedInteractions,
   onSelectMergedInteraction,
   onUnmergeCalls,
@@ -1495,6 +1427,9 @@ export function VoiceCallControls({
   joinableCall,
   onJoinCall,
   className,
+  trailingControlsPlain,
+  mergeTrailingIntoCluster,
+  rosterStacked,
 }: VoiceCallControlsProps) {
   // Decorative-only fallback for a caller that hasn't wired `onHoldChange`
   // through yet — see that prop's own doc comment (same `localVideoAdded`/
@@ -1680,11 +1615,6 @@ export function VoiceCallControls({
     return () => window.clearTimeout(bubbleTimeoutRef.current);
   }, [colleagues.length]);
   const [consult, setConsult] = useState<VoiceCallConsult | undefined>(undefined);
-  // Volume slider — purely local/decorative, same "no real telephony
-  // backing this" convention as Hold/Mute/Mask/Record (see this file's own
-  // top doc comment).
-  const [volume, setVolume] = useState(70);
-  const [volumeOpen, setVolumeOpen] = useState(false);
 
   // Per explicit request ("when end call is clicked transition the end
   // call button to a hanging up state (disabled) then disable the other
@@ -1813,6 +1743,31 @@ export function VoiceCallControls({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  // The roster strip used to be a plain `flex-wrap` row with no overflow
+  // handling — fine with real room, but at a genuinely narrow container (a
+  // docked panel, or this bar on a phone-width viewport) the connector line
+  // interleaved between pills (below) wrapped mid-pattern, leaving a
+  // dangling line connected to nothing on the line it wrapped from (caught
+  // from a screenshot). Fixed by reusing this design system's own existing
+  // "scrollable row with hover-chevron affordance" pattern
+  // (`useScrollChevrons`/`ScrollChevronButton`, lyra-ui's `scroll-chevron
+  // .tsx` — the same mechanism `TabList`'s own horizontal overflow already
+  // uses, newly re-exported from lyra-ui's `index.ts` for this) instead of
+  // wrapping: the roster becomes a single, never-wrapping scrollable line,
+  // with chevrons fading in exactly when there's more content than room.
+  // Scrolling is an acceptable, standard interaction for a roster
+  // specifically because it's an open-ended LIST of people — there's no
+  // fixed, enumerable set of "the roster controls" an agent needs to be
+  // able to see all of at a glance the way there is for the decorative
+  // Hold-through-Volume cluster below (which went a different way — see
+  // that cluster's own doc comment, where this same scroll approach was
+  // tried first and then deliberately replaced).
+  const rosterScrollRef = useRef<HTMLDivElement>(null);
+  const rosterChevrons = useScrollChevrons(
+    rosterScrollRef,
+    [colleagues.length, mergedInteractions?.length, consult],
+    "horizontal"
+  );
   useEffect(() => {
     if (!isExiting) return;
     const el = barRef.current;
@@ -1909,9 +1864,8 @@ export function VoiceCallControls({
     // twice.
     if (isEnding) return;
     setIsEnding(true);
-    // Force-close the Keypad/Conference popovers too — same "don't leave a
-    // conflicting open state showing" reasoning `CompactVolumeButton`'s own
-    // `disabled` prop doc comment gives for the volume popover. Any
+    // Force-close the Keypad/Conference popovers too — don't leave a
+    // conflicting open state showing once the call is ending. Any
     // in-flight consult is abandoned outright (not merged) — ending the
     // whole call takes the private side-conversation down with it, same as
     // hanging up on a real phone mid-consult would.
@@ -1939,6 +1893,153 @@ export function VoiceCallControls({
   // silently taking down more than that.
   const endCallLabel = mergedInteractions?.length ? "End All Calls" : "End Call";
   const endingLabel = mergedInteractions?.length ? "Ending All Calls..." : "Hanging Up...";
+
+  // Mute/Add video/End Call — pulled out into one shared fragment (not
+  // inlined at a single call site) so `mergeTrailingIntoCluster`'s own doc
+  // comment's "same buttons, different box" merge can reuse this EXACT
+  // JSX from either of its two possible positions without duplicating it
+  // (and risking the two copies drifting — see `scroll-chevron.tsx`'s own
+  // doc comment in lyra-ui for the precedent this avoids).
+  const trailingButtons = (
+    <>
+      {/* Mute — moved out of the centered cluster above and given
+          `strong` (see `WideCallControlButton`'s own doc comment for
+          what that darkens) per the reference screenshot, which shows
+          this icon visibly darker than the rest of the bar. Behavior
+          unchanged; no more wrapping `Tooltip` (see the block comment
+          a few controls up for why). */}
+      {controlsIconOnly ? (
+        <Tooltip content={muted ? "Unmute" : "Mute"} placement="top">
+          <CompactCallControlButton
+            icon={muted ? <MicOff className="h-5 w-5" strokeWidth={1.5} /> : <Mic className="h-5 w-5" strokeWidth={1.5} />}
+            active={muted}
+            strong
+            // See `trailingControlsPlain`'s own doc comment — drops the
+            // bordered `outline` look for the left nav's narrow host.
+            variant={trailingControlsPlain ? undefined : "outline"}
+            aria-label={muted ? "Unmute" : "Mute"}
+            onClick={() => setMuted((m) => !m)}
+            disabled={isEnding}
+          />
+        </Tooltip>
+      ) : (
+        <WideCallControlButton
+          icon={muted ? <MicOff className="h-5 w-5" strokeWidth={1.5} /> : <Mic className="h-5 w-5" strokeWidth={1.5} />}
+          label={muted ? "Unmute" : "Mute"}
+          active={muted}
+          strong
+          // Per explicit request ("make the mute / video buttons
+          // outline icon buttons") — see `WideCallControlButton`'s own
+          // `variant` doc comment.
+          variant="outline"
+          onClick={() => setMuted((m) => !m)}
+          // See `isEnding`'s own doc comment above.
+          disabled={isEnding}
+        />
+      )}
+      {/* Add video — same `strong` darkening as Mute per the reference
+          screenshot (only visible in practice where `showAddVideo` is
+          true, i.e. Phase 2 — Phase 1 hides this button entirely, see
+          `showAddVideo`'s own doc comment above). Icon swap: slashed =
+          off (no video), plain = on (video added), matching Mute's own
+          convention. */}
+      {showAddVideo && (controlsIconOnly ? (
+        <Tooltip content={videoAdded ? "Remove video" : "Add video"} placement="top">
+          <CompactCallControlButton
+            icon={videoAdded ? <Video className="h-5 w-5" strokeWidth={1.5} /> : <VideoOff className="h-5 w-5" strokeWidth={1.5} />}
+            active={videoAdded}
+            strong
+            // See `trailingControlsPlain`'s own doc comment — drops the
+            // bordered `outline` look for the left nav's narrow host.
+            variant={trailingControlsPlain ? undefined : "outline"}
+            aria-label={videoAdded ? "Remove video" : "Add video"}
+            onClick={() => {
+              if (onToggleVideo) {
+                onToggleVideo();
+                return;
+              }
+              setLocalVideoAdded((prev) => !prev);
+            }}
+            disabled={isEnding}
+          />
+        </Tooltip>
+      ) : (
+        <WideCallControlButton
+          icon={videoAdded ? <Video className="h-5 w-5" strokeWidth={1.5} /> : <VideoOff className="h-5 w-5" strokeWidth={1.5} />}
+          label={videoAdded ? "Remove video" : "Add video"}
+          active={videoAdded}
+          strong
+          variant="outline"
+          onClick={() => {
+            if (onToggleVideo) {
+              onToggleVideo();
+              return;
+            }
+            setLocalVideoAdded((prev) => !prev);
+          }}
+          disabled={isEnding}
+        />
+      ))}
+      {/* End Call — see this file's own git history for the full "why" on
+          every detail below (size/height/filled-red/disabled-while-ending
+          reasoning) — unchanged, just lifted into this shared fragment. */}
+      {controlsIconOnly ? (
+        <Tooltip content={isEnding ? endingLabel : endCallLabel} placement="top">
+          {trailingControlsPlain ? (
+            // See `trailingControlsPlain`'s own doc comment — the same
+            // plain `CompactCallControlButton` every other control here
+            // uses (`critical` = red text on hover/press, no solid
+            // fill), instead of the filled destructive `Button` the
+            // bottom bar keeps. `isEnding`'s own disabled/spinner
+            // behavior is unchanged.
+            <CompactCallControlButton
+              icon={
+                isEnding ? (
+                  <Spinner variant="circle" size="sm" label="Hanging up" />
+                ) : (
+                  <PhoneOff className="h-5 w-5" strokeWidth={1.5} />
+                )
+              }
+              critical
+              aria-label={isEnding ? endingLabel : endCallLabel}
+              onClick={handleHangUp}
+              disabled={isEnding}
+            />
+          ) : (
+            <Button
+              variant="destructive"
+              size="icon"
+              className="h-10 w-10 shrink-0"
+              onClick={handleHangUp}
+              disabled={isEnding}
+              aria-label={isEnding ? endingLabel : endCallLabel}
+            >
+              {isEnding ? (
+                <Spinner variant="circle" size="sm" color="inverse" label="Hanging up" />
+              ) : (
+                <PhoneOff className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
+              )}
+            </Button>
+          )}
+        </Tooltip>
+      ) : (
+        <Button
+          variant="destructive"
+          size="lg"
+          className="h-auto shrink-0 gap-1.5"
+          onClick={handleHangUp}
+          disabled={isEnding}
+        >
+          {isEnding ? (
+            <Spinner variant="circle" size="sm" color="inverse" label="Hanging up" />
+          ) : (
+            <PhoneOff className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
+          )}
+          {isEnding ? endingLabel : endCallLabel}
+        </Button>
+      )}
+    </>
+  );
 
   return (
     // Per explicit request/reference screenshot: this bar floats as its own
@@ -2081,8 +2182,13 @@ export function VoiceCallControls({
         // wrapping a pill + its connector (this render loop's previous
         // shape) hides them from it. See the render loop below for how this
         // list turns into `motion.span`s instead.
+        // `rosterStacked ? "w-full" : undefined` on every pill below — see
+        // `rosterStacked`'s own doc comment for the full "why": stretches
+        // each pill to the stack's full column width instead of staying
+        // content-sized, only in that narrow/floating mode.
+        const chipClassName = rosterStacked ? "w-full" : undefined;
         const chips: { key: string; node: React.ReactNode }[] = [
-          { key: "you", node: <ParticipantChip label="You" isSelf isOnHold={false} /> },
+          { key: "you", node: <ParticipantChip label="You" isSelf isOnHold={false} className={chipClassName} /> },
           {
             key: "customer",
             node: (
@@ -2090,6 +2196,7 @@ export function VoiceCallControls({
                 label={customerLabel ?? "Customer"}
                 isOnHold={onHold}
                 onToggleHold={() => setOnHold(!onHold)}
+                className={chipClassName}
               />
             ),
           },
@@ -2105,6 +2212,7 @@ export function VoiceCallControls({
                     onToggleHold={() => handleToggleColleagueHold(colleague.id)}
                     onTransfer={handleTransferColleague}
                     onHangUp={() => handleDropColleague(colleague.id)}
+                    className={chipClassName}
                   />
                 ),
               }))
@@ -2121,96 +2229,149 @@ export function VoiceCallControls({
                         ? () => onSelectMergedInteraction(interaction.id)
                         : undefined
                     }
+                    className={chipClassName}
                   />
                 ),
               }))
             : []),
         ];
-        return (
-          <div className="mb-2 flex flex-wrap items-center">
-            {/* `mode="popLayout"` (not the default) is what makes the
-                REMAINING pills actually slide together the moment one
-                exits, rather than snapping into place the instant it's
-                gone — per explicit follow-up request ("when a participant
-                is removed, the remaining participant pills come together.
-                Animate that more fluidly, rather than so quick"). In the
-                default mode, an exiting child stays IN normal layout flow
-                for the duration of its own exit animation, so every
-                sibling with `layout` only starts animating toward ITS new
-                position once the exiting one is finally removed — `popLay
-                out` instead pulls an exiting child out of flow immediately
-                (positioning it absolutely in place) so its own fade-out and
-                its siblings' `layout` reflow play at the same time, which
-                is the actual "pills come together" motion being asked for.
-                `initial={false}` keeps the FIRST render (an already-full
-                roster the instant this strip mounts) from replaying every
-                pill's own entrance animation — only a REAL subsequent
-                add/remove should animate. */}
-            <AnimatePresence initial={false} mode="popLayout">
-              {chips.flatMap((chip, i) => {
-                const connector =
-                  i > 0 ? (
-                    // Went `h-px` → `h-0.5` (bolder, per an earlier
-                    // follow-up) → back to `h-px` (per a further follow-up,
-                    // "reduce the border size and connecting lines' pixel
-                    // size" — `h-0.5` had gone too heavy alongside the
-                    // pill's own border size). Still visibly heavier than
-                    // the thin subtle group-boundary dividers elsewhere on
-                    // this bar would be at this same height, purely because
-                    // of its color (see below), not its thickness. Color is
-                    // the same `color-mix()`-lightened `border-strong` the
-                    // pill's own border uses (see that className's own doc
-                    // comment, just above in this file, for the full "why
-                    // color-mix" reasoning) — kept identical between the
-                    // two on purpose, so a further "lighten"/"darken"
-                    // request to either one stays trivial to apply to both
-                    // in lockstep. `layout` lets it slide to its new
-                    // position/width alongside the pills on either side of
-                    // it; a plain opacity fade (no scale — it's a thin line,
-                    // not a pill) covers its own entrance/exit.
-                    <motion.span
-                      key={`${chip.key}-connector`}
-                      layout
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: 0.35, ease: "easeOut" }}
-                      aria-hidden="true"
-                      className="h-px w-4 shrink-0 self-center bg-[color-mix(in_srgb,var(--lyra-color-border-strong)_60%,transparent)]"
-                    />
-                  ) : null;
-                // `layout` is the actual FLIP animation — framer-motion
-                // measures this pill's position before/after whatever
-                // triggered the re-render and smoothly animates the
-                // difference, instead of letting the browser's own layout
-                // engine just snap it straight to the new spot. `initial`/
-                // `animate`/`exit` are the pill's OWN join/leave motion
-                // (scale+fade) — unchanged in FEEL from the prior, simpler
-                // CSS-class version, just now expressed as framer-motion
-                // variants so `AnimatePresence` can delay the real unmount
-                // until `exit` finishes playing. Went 0.3s (the original
-                // CSS version) → 0.5s (per "more fluidly, rather than so
-                // quick") → settled at 0.35s/`easeOut` per a further
-                // explicit follow-up ("the conference animation when
-                // participant is dropped can be faster, 500ms too slow") —
-                // still visibly smoother/slower than the original 0.3s
-                // snap, just not as deliberate as the 0.5s pass read.
-                const pill = (
-                  <motion.span
-                    key={chip.key}
-                    layout
-                    initial={{ opacity: 0, scale: 0.5 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.5 }}
-                    transition={{ duration: 0.35, ease: "easeOut" }}
-                    className="inline-flex"
+        // Shared between both layouts below (horizontal-scroll and
+        // `rosterStacked`) — see `rosterStacked`'s own doc comment for why
+        // there are two layouts at all. Extracted into one function rather
+        // than duplicated per-layout specifically so the FLIP/enter-exit
+        // animation logic (the actual nontrivial part — `layout`,
+        // `popLayout`, the exact timings below) stays in exactly one place;
+        // only the connector/pill classNames differ between orientations,
+        // passed in as args.
+        //
+        // `layout` is the actual FLIP animation — framer-motion measures
+        // each pill's position before/after whatever triggered the
+        // re-render and smoothly animates the difference, instead of
+        // letting the browser's own layout engine just snap it straight to
+        // the new spot. `initial`/`animate`/`exit` are the pill's OWN
+        // join/leave motion (scale+fade) — unchanged in FEEL from the
+        // prior, simpler CSS-class version, just now expressed as
+        // framer-motion variants so `AnimatePresence` can delay the real
+        // unmount until `exit` finishes playing. Went 0.3s (the original
+        // CSS version) → 0.5s (per "more fluidly, rather than so quick") →
+        // settled at 0.35s/`easeOut` per a further explicit follow-up ("the
+        // conference animation when participant is dropped can be faster,
+        // 500ms too slow") — still visibly smoother/slower than the
+        // original 0.3s snap, just not as deliberate as the 0.5s pass read.
+        const renderRosterItems = (connectorClassName: string, pillClassName: string) =>
+          chips.flatMap((chip, i) => {
+            const connector =
+              i > 0 ? (
+                <motion.span
+                  key={`${chip.key}-connector`}
+                  layout
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.35, ease: "easeOut" }}
+                  aria-hidden="true"
+                  className={connectorClassName}
+                />
+              ) : null;
+            const pill = (
+              <motion.span
+                key={chip.key}
+                layout
+                initial={{ opacity: 0, scale: 0.5 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.5 }}
+                transition={{ duration: 0.35, ease: "easeOut" }}
+                className={pillClassName}
+              >
+                {chip.node}
+              </motion.span>
+            );
+            return connector ? [connector, pill] : [pill];
+          });
+
+        if (rosterStacked) {
+          return (
+            // Vertical stack, one pill per row — per explicit follow-up
+            // request ("need to be able to see all parties rather than a
+            // horizontal scroll. Likely stacking"): no scroll/chevrons at
+            // all here (unlike the horizontal layout just below) — this
+            // mode exists specifically so a SMALL, FIXED roster is fully
+            // visible at a glance in the narrow floating host; if it ever
+            // overflows the floating card's own current height, that
+            // card's own `overflow-y-auto` wrapper (`FloatingVoiceControls
+            // Anchor`) scrolls the whole thing vertically instead, which
+            // reads as "a longer list" rather than "a horizontal filmstrip
+            // of people," a more natural fit for a roster. Connector
+            // rotates from a horizontal line to a vertical one
+            // (`w-px h-3 mx-auto`, was `h-px w-4`) to match the new
+            // top-to-bottom flow; each pill is full-width (`chipClassName`,
+            // set when `chips` was built above) instead of content-sized.
+            <div className="mb-2 flex flex-col gap-1">
+              <AnimatePresence initial={false} mode="popLayout">
+                {renderRosterItems(
+                  "h-3 w-px shrink-0 self-center mx-auto bg-[color-mix(in_srgb,var(--lyra-color-border-strong)_60%,transparent)]",
+                  "flex w-full"
+                )}
+              </AnimatePresence>
+              {showMerged && onUnmergeCalls && (
+                <>
+                  <span className="my-1 h-px w-full shrink-0 bg-lyra-border-subtle" aria-hidden="true" />
+                  <button
+                    type="button"
+                    onClick={onUnmergeCalls}
+                    className="flex items-center gap-1.5 self-start rounded-full px-2 py-1 lyra-body-sm text-lyra-fg-secondary hover:bg-lyra-state-hover"
                   >
-                    {chip.node}
-                  </motion.span>
-                );
-                return connector ? [connector, pill] : [pill];
-              })}
+                    <Split className="h-3.5 w-3.5" strokeWidth={2} />
+                    Un-merge calls
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        }
+
+        return (
+          // Was a plain `flex flex-wrap` row — per explicit follow-up
+          // report ("in a small width, the call controls and conference
+          // pills become messy"): once enough pills forced a wrap, the
+          // connector segment interleaved after whatever pill happened to
+          // fall last on a line (see each one's own doc comment below) had
+          // no next-pill-on-the-same-line to actually connect to — it just
+          // dangled off toward the row's right edge, reading as a broken
+          // line rather than a joined one. Switched to this design system's
+          // own existing scrollable-row-with-chevrons pattern instead
+          // (`useScrollChevrons`/`ScrollChevronButton`, newly re-exported
+          // from lyra-ui for this — see `rosterScrollRef`'s own doc comment
+          // above): the chip+connector row never wraps, so a connector is
+          // ALWAYS between two real, currently-adjacent pills; once the
+          // roster is wider than this strip's own available width, the
+          // chevrons appear and scrolling (not wrapping) is how the rest
+          // becomes reachable. The Un-merge action (below) stays OUTSIDE
+          // the scrollable area, same "critical/always-reachable controls
+          // are pinned, decorative content scrolls" split this file's main
+          // control bar already follows. `rosterStacked` (above) replaces
+          // this whole layout in the floating/narrow host instead — see
+          // that prop's own doc comment for why horizontal scroll stays
+          // right for THIS (wide bottom bar) rendering.
+          <div className="mb-2 flex items-center gap-1">
+            {rosterChevrons.canScrollStart && (
+              <ScrollChevronButton direction="left" onStep={() => (rosterScrollRef.current!.scrollLeft -= 8)} />
+            )}
+            <div
+              ref={rosterScrollRef}
+              onScroll={rosterChevrons.onScroll}
+              className="flex min-w-0 flex-1 flex-nowrap items-center overflow-x-auto lyra-scrollbar-hide"
+            >
+            <AnimatePresence initial={false} mode="popLayout">
+              {renderRosterItems(
+                "h-px w-4 shrink-0 self-center bg-[color-mix(in_srgb,var(--lyra-color-border-strong)_60%,transparent)]",
+                "inline-flex"
+              )}
             </AnimatePresence>
+            </div>
+            {rosterChevrons.canScrollEnd && (
+              <ScrollChevronButton direction="right" onStep={() => (rosterScrollRef.current!.scrollLeft += 8)} />
+            )}
             {showMerged && (
               <>
                 {/* Group-level action (Un-merge only now) — per explicit
@@ -2288,7 +2449,26 @@ export function VoiceCallControls({
           // icon+label `WideCallControlButton`s (each roughly h-16 now,
           // was h-8) so they don't sit flush against this card's own
           // border.
-          "w-full flex items-center justify-between gap-2 rounded-lg px-3 py-2"
+          //
+          // `flex-wrap` (was a rigid, never-wrapping single row) — per
+          // explicit follow-up report/requirement ("test at 360px width...
+          // it's important that all controls stay in view. An agent user
+          // [at this width] is using most of the computer screen space for
+          // another app... this Agent Workspace app is simply a control
+          // center for the voice call"): a narrow agent-workspace column is
+          // a REAL, intended use of this bar, not an edge case to merely
+          // not-look-broken at — every control needs to stay reachable at
+          // a glance, never hidden behind a scroll interaction the way an
+          // open-ended roster of people reasonably can be (see
+          // `rosterScrollRef`'s own doc comment for that distinction).
+          // `justify-between` is dropped alongside it — it only ever
+          // mattered for distributing LEFTOVER space on a single line, and
+          // the middle slot's own `flex-auto` (below) already claims 100%
+          // of any leftover space on its own via `flex-grow`, so there was
+          // never really space left for `justify-between` to distribute in
+          // the first place; keeping it around risked extra, unwanted
+          // inter-row spacing once this row actually wraps.
+          "w-full flex flex-wrap items-center gap-2 rounded-lg px-3 py-2"
         )}
       >
         {/* Three real flex slots now (timer / main buttons+volume / dark
@@ -2300,12 +2480,33 @@ export function VoiceCallControls({
             lighter/decorative controls, a divider, a visibly DARKER
             mute+video pair, then a large red "End Call" button anchored to
             the far right. `justify-between` on this row still does the
-            bookending work (leading/trailing slots `shrink-0`, middle slot
-            `flex-1`+`justify-center` claims whatever space is left and
-            centers its own contents within it) — same mechanism the old
-            two-slot layout already used, just with a third slot added and
-            the controls redistributed among all three. */}
-        <div className="flex shrink-0 items-center gap-2">
+            bookending work (leading slot now shrinkable — see its own
+            `className`'s doc comment just below — trailing slot still
+            `shrink-0`, middle slot `flex-1`+`justify-center` claims
+            whatever space is left and centers its own contents within it)
+            — same mechanism the old two-slot layout already used, just
+            with a third slot added and the controls redistributed among
+            all three. */}
+        <div className="flex min-w-0 items-center gap-2">
+          {/* Was `shrink-0` (rigidly reserving this slot's full natural
+              width — avatar + the UN-truncated name/Conference/Merged tags
+              + timer — no matter how little room the card actually had) —
+              per explicit follow-up report ("in a small width, the call
+              controls and conference pills become messy"): with a real
+              customer name, this slot alone could reserve 200px+ of a
+              ~450px-wide narrow card, starving the decorative cluster
+              (see that slot's own doc comment, just below) of room it
+              needs to wrap onto its own line cleanly. `min-w-0` (replacing
+              `shrink-0`) lets the flex layout actually impose a narrower
+              width on this slot once space is tight, which is what lets
+              `customerLabel`'s own `truncate` (below) genuinely shorten the
+              name instead of always rendering at full length with room
+              reserved for it regardless. The avatar itself still can't
+              shrink below its own fixed `h-9 w-9 shrink-0`, and the
+              Conference/Merged `Tag`s are each still `shrink-0` too — so
+              squeezing this slot only ever eats into the name text itself,
+              never the avatar or an already-short status pill, which is
+              exactly the right thing to sacrifice first here. */}
           {/* Avatar chip + identity line — added per explicit request/
               reference screenshot ("add the customer avatar. Add the name /
               number/email above the timer"). Only renders while the caller
@@ -2339,6 +2540,8 @@ export function VoiceCallControls({
             >
               {customerInitials ? (
                 <span className="lyra-label-sm text-lyra-fg-on-primary">{customerInitials}</span>
+              ) : isAgentOrSkill ? (
+                <Headset className="h-4 w-4 text-lyra-fg-on-primary" strokeWidth={1.5} />
               ) : (
                 <User className="h-4 w-4 text-lyra-fg-on-primary" strokeWidth={1.5} />
               )}
@@ -2491,8 +2694,42 @@ export function VoiceCallControls({
           )}
           </div>
         </div>
-        <div className="flex min-w-0 flex-1 items-stretch justify-center gap-1">
-          {/* Decorative cluster — Hold/Mask/Record/Keypad/Transcript/Volume,
+        <div className="flex min-w-0 flex-auto items-stretch justify-center gap-1">
+          {/* `flex-auto` (`flex: 1 1 auto`, was `flex-1`/`flex: 1 1 0%`) —
+              per explicit follow-up report/requirement ("test at 360px
+              width, and it's important that all controls stay in view"):
+              this slot used to render Hold-through-Volume directly as
+              children of a `flex-1` box with no overflow handling, so once
+              their combined width exceeded whatever room the leading/
+              trailing `shrink-0` slots left it, these `shrink-0` buttons
+              had nowhere to go but to overflow past this box's own edges
+              (caught from a screenshot). A first fix reached for a
+              scrollable-row-with-chevrons (the same pattern the roster
+              strip still uses, above) — but that HIDES controls behind a
+              scroll interaction, which is fine for an open-ended roster of
+              people and wrong for a fixed, small set of call controls an
+              agent needs to see at a glance, especially once this app is
+              basically acting as a standalone "control center" for the
+              call in a narrow window. `flex-auto` is what fixes this
+              properly instead: a `flex: 1 1 0%` item's hypothetical size
+              for the browser's own wrap/overflow math is its BASIS (0,
+              regardless of real content), so the outer card row (now
+              `flex-wrap`, see its own doc comment) never saw this slot as
+              contributing to an overflow and never wrapped anything —
+              `flex-auto`'s basis is the slot's real intrinsic content width
+              instead, so once leading+this slot+trailing genuinely don't
+              fit on one line, the ROW wraps this whole slot onto its own
+              line, where the `flex-wrap` just below (replacing the old
+              `overflow-x-auto`) lets Hold-through-Volume reflow across
+              that line's full width instead of being clipped or scrolled.
+              Still has `flex-grow:1` (unchanged from `flex-1`), so this
+              slot still claims 100% of any leftover space and `justify-
+              center` still centers its own children within it whenever
+              there's enough room for everything on one line — the common,
+              wide-desktop case is visually unchanged. */}
+          <div className="flex min-w-0 flex-wrap items-stretch gap-1">
+          {/* Decorative cluster — Hold/Mask/Record/Keypad/Consult (Transcript
+              and Volume were removed outright, per explicit request),
               unchanged in behavior/styling from before, just relocated out
               of the old leading `justify-start` slot into this slot
               (originally `justify-center`, then briefly `justify-end` per
@@ -2506,8 +2743,9 @@ export function VoiceCallControls({
               whatever open space the leading/trailing `shrink-0` slots
               leave it once this bar is wider than its own contents need —
               now bracketed by its own leading/trailing dividers (the first
-              child below, and the one right after `CompactVolumeButton`
-              further down) instead of relying on the trailing dark
+              child below, and the one right after Consult further down —
+              Transcript/Volume used to sit between them, removed per
+              explicit request) instead of relying on the trailing dark
               cluster's divider to read as this group's right edge. Those
               two dividers are deliberately INSIDE this centered flex item
               (not floated at the leading/trailing slot boundaries) so they
@@ -2901,230 +3139,28 @@ export function VoiceCallControls({
               />
             )}
           </Popover>
-          {/* Transcript — per an earlier explicit follow-up request ("take
-              the transcript button out of the volume dropdown and put it to
-              the left of the volume button"): its own plain
-              `WideCallControlButton`, same as every other control in this
-              centered cluster. Static "Transcript" label regardless of
-              `transcriptOpen` (same convention Mask already uses — a
-              static label, with `active` tinting alone signaling on/off —
-              "Show transcript"/"Hide transcript" was fine as hover-only
-              `Tooltip` content, but doesn't fit this button's fixed 80px
-              column as a permanently-visible label without wrapping or
-              truncating). `onToggleTranscript` omitted entirely still
-              hides this trigger. */}
-          {onToggleTranscript && (controlsCompact ? (
-            <Tooltip content="Transcript" placement="top">
-              <CompactCallControlButton
-                icon={<FileText className="h-5 w-5" strokeWidth={1.5} />}
-                active={transcriptOpen}
-                aria-label="Transcript"
-                onClick={onToggleTranscript}
-                disabled={isEnding}
-              />
-            </Tooltip>
-          ) : (
-            <WideCallControlButton
-              icon={<FileText className="h-5 w-5" strokeWidth={1.5} />}
-              label="Transcript"
-              active={transcriptOpen}
-              onClick={onToggleTranscript}
-              // See `isEnding`'s own doc comment above.
-              disabled={isEnding}
-            />
-          ))}
-          <CompactVolumeButton volume={volume} onVolumeChange={setVolume} disabled={isEnding} compact={controlsCompact} />
           {/* Right separator — see the leading one's own doc comment
               (this slot's opening `<div>`, above) for why this lives here,
-              right after `CompactVolumeButton`, rather than at this slot's
-              trailing boundary. */}
+              right after Consult, rather than at this slot's trailing
+              boundary. Transcript and Volume (previously the last two
+              controls before this divider) were removed outright per
+              explicit request ("remove volume and transcript buttons from
+              all voice controls") — this bar no longer owns any transcript-
+              panel-toggle or call-volume concept at all; a caller that used
+              to wire `onToggleTranscript`/`transcriptOpen` through now just
+              doesn't (see each page's own `<VoiceCallControls>` call site). */}
           <span aria-hidden="true" className="h-4 w-px shrink-0 self-center bg-lyra-border-subtle" />
+          {/* `mergeTrailingIntoCluster` — see that prop's own doc comment —
+              folds Mute/Add video/End Call into THIS SAME wrapping pool,
+              right after Consult, instead of leaving them in their own
+              separate trailing box below (which never shares a row with
+              this one, even when there's visible room). */}
+          {mergeTrailingIntoCluster && trailingButtons}
+          </div>
         </div>
-        <div className="flex shrink-0 items-stretch gap-2">
-          {/* Mute — moved out of the centered cluster above and given
-              `strong` (see `WideCallControlButton`'s own doc comment for
-              what that darkens) per the reference screenshot, which shows
-              this icon visibly darker than the rest of the bar. Behavior
-              unchanged; no more wrapping `Tooltip` (see the block comment
-              a few controls up for why). */}
-          {controlsIconOnly ? (
-            <Tooltip content={muted ? "Unmute" : "Mute"} placement="top">
-              <CompactCallControlButton
-                icon={muted ? <MicOff className="h-5 w-5" strokeWidth={1.5} /> : <Mic className="h-5 w-5" strokeWidth={1.5} />}
-                active={muted}
-                strong
-                variant="outline"
-                aria-label={muted ? "Unmute" : "Mute"}
-                onClick={() => setMuted((m) => !m)}
-                disabled={isEnding}
-              />
-            </Tooltip>
-          ) : (
-            <WideCallControlButton
-              icon={muted ? <MicOff className="h-5 w-5" strokeWidth={1.5} /> : <Mic className="h-5 w-5" strokeWidth={1.5} />}
-              label={muted ? "Unmute" : "Mute"}
-              active={muted}
-              strong
-              // Per explicit request ("make the mute / video buttons
-              // outline icon buttons") — see `WideCallControlButton`'s own
-              // `variant` doc comment.
-              variant="outline"
-              onClick={() => setMuted((m) => !m)}
-              // See `isEnding`'s own doc comment above.
-              disabled={isEnding}
-            />
-          )}
-          {/* Add video — same `strong` darkening as Mute per the reference
-              screenshot (only visible in practice where `showAddVideo` is
-              true, i.e. Phase 2 — Phase 1 hides this button entirely, see
-              `showAddVideo`'s own doc comment above).
-              Per an explicit bug report ("the video button state is
-              backwards - a line through it indicates no video"): the
-              icon swap here had the slashed/plain `VideoOff`/`Video` pair
-              inverted relative to every other toggle in this bar (compare
-              Mute just above: the SLASHED `MicOff` shows when muted is
-              OFF-state, the plain `Mic` when it's on) — this button was
-              instead showing the slashed `VideoOff` glyph while video WAS
-              added (the on-state) and the plain camera while it wasn't.
-              Swapped so slashed = off (no video), plain = on (video added),
-              matching Mute's own convention; `active`/label/click behavior
-              below are unchanged, only which icon renders for which state,
-              and (per the same "label the buttons again" request as every
-              other control here) a visible label instead of a hover-only
-              `Tooltip`. */}
-          {showAddVideo && (controlsIconOnly ? (
-            <Tooltip content={videoAdded ? "Remove video" : "Add video"} placement="top">
-              <CompactCallControlButton
-                icon={videoAdded ? <Video className="h-5 w-5" strokeWidth={1.5} /> : <VideoOff className="h-5 w-5" strokeWidth={1.5} />}
-                active={videoAdded}
-                strong
-                variant="outline"
-                aria-label={videoAdded ? "Remove video" : "Add video"}
-                onClick={() => {
-                if (onToggleVideo) {
-                  onToggleVideo();
-                  return;
-                }
-                setLocalVideoAdded((prev) => !prev);
-              }}
-                disabled={isEnding}
-              />
-            </Tooltip>
-          ) : (
-            <WideCallControlButton
-              icon={videoAdded ? <Video className="h-5 w-5" strokeWidth={1.5} /> : <VideoOff className="h-5 w-5" strokeWidth={1.5} />}
-              label={videoAdded ? "Remove video" : "Add video"}
-              active={videoAdded}
-              strong
-              // Per explicit request ("make the mute / video buttons
-              // outline icon buttons") — see `WideCallControlButton`'s own
-              // `variant` doc comment.
-              variant="outline"
-              onClick={() => {
-                if (onToggleVideo) {
-                  onToggleVideo();
-                  return;
-                }
-                setLocalVideoAdded((prev) => !prev);
-              }}
-              // See `isEnding`'s own doc comment above.
-              disabled={isEnding}
-            />
-          ))}
-          {/* End Call — per explicit request ("make the leave button big
-              and red and have it say 'end call'"): this used to be a plain
-              icon-only `CompactCallControlButton` with `critical` styling
-              (a small red PhoneOff glyph, label only reachable via
-              `Tooltip`) same as every other control in this bar. It's now a
-              real lyra-ui `Button` instead — `variant="destructive"` is
-              this design system's own solid-red/filled treatment (see
-              button.tsx: `bg-lyra-bg-destructive` + `text-lyra-fg-on-
-              primary`, the same token pair every other destructive action
-              in this app already uses). Label is now always-visible text
-              ("End Call") next to the icon instead of hidden behind a hover
-              `Tooltip`, so no `Tooltip` wrapper here anymore — a `Button`
-              with visible text content already has its own accessible
-              name. Size was originally `lg` (h-9) to read as "big" against
-              the surrounding h-8 icon buttons; per an explicit follow-up
-              request ("make the red button smaller") this became `default`
-              (h-8) instead, matching the row's own then-h-8 icon buttons
-              exactly. Bumped back to `lg` (h-9) here per a later explicit
-              follow-up request/reference screenshot ("make the voice
-              controls larger... keep the End Call button filled red") —
-              every OTHER control in this bar just grew from a flat h-8
-              icon-only button to a taller icon+label column
-              (`WideCallControlButton`, `h-auto` with `py-2` — roughly h-16
-              in practice), so `default` would now read as visibly SMALLER
-              than its neighbors instead of matching them. Still
-              `variant="destructive"` (filled red, unchanged) and still its
-              own real `Button` with a visible label — only the size moved,
-              exactly as asked.
-              Per a later explicit follow-up request ("make the end call
-              button the same height as the mute and add video buttons"):
-              `size="lg"`'s own fixed `h-9` is overridden here to `h-auto`
-              (via `cn()`'s tailwind-merge, same "last one wins" mechanism
-              `wrap`'s own doc comment in button.tsx describes) so this
-              button no longer sits at a fixed height while its neighbors
-              have grown taller — instead it now stretches to match
-              whichever of Mute/Add video is tallest, via this row's own
-              `items-stretch` (see the divider's own comment just above for
-              why it needed an explicit `self-center` once the row stopped
-              using `items-center`). `size="lg"` is still passed for its
-              padding/typography, just no longer for its height.
-              Per explicit follow-up request ("when end call is clicked
-              transition the end call button to a hanging up state
-              (disabled)"): once `isEnding` is set (`handleHangUp` above),
-              this button disables itself (lyra-ui's own `disabled:opacity-
-              40`/`disabled:pointer-events-none`, same dimmed-and-inert look
-              every other disabled control in this bar already gets — see
-              button.tsx) and swaps its icon+label for an inverse `Spinner`
-              + "Hanging Up..." — the one visible cue (besides the rest of
-              the bar disabling alongside it) that the click registered
-              while `onHangUp` itself is deferred behind the exit
-              animation (see `isEnding`'s own doc comment above). */}
-          {/* Below 768px (`controlsIconOnly`, this file's own top doc
-              comment): same `variant="destructive"` `Button`, just
-              icon-only at a fixed 40px (`h-10 w-10`, matching every other
-              icon-only control at this width — `CompactCallControlButton`
-              itself isn't reused here since End Call is deliberately a
-              plain `Button`, not part of that shared icon-button
-              component, per this block's own doc comment above) instead
-              of the icon+"End Call"/"Hanging Up..." text column, with a
-              `Tooltip` standing in for the now-hidden label. */}
-          {controlsIconOnly ? (
-            <Tooltip content={isEnding ? endingLabel : endCallLabel} placement="top">
-              <Button
-                variant="destructive"
-                size="icon"
-                className="h-10 w-10 shrink-0"
-                onClick={handleHangUp}
-                disabled={isEnding}
-                aria-label={isEnding ? endingLabel : endCallLabel}
-              >
-                {isEnding ? (
-                  <Spinner variant="circle" size="sm" color="inverse" label="Hanging up" />
-                ) : (
-                  <PhoneOff className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
-                )}
-              </Button>
-            </Tooltip>
-          ) : (
-            <Button
-              variant="destructive"
-              size="lg"
-              className="h-auto shrink-0 gap-1.5"
-              onClick={handleHangUp}
-              disabled={isEnding}
-            >
-              {isEnding ? (
-                <Spinner variant="circle" size="sm" color="inverse" label="Hanging up" />
-              ) : (
-                <PhoneOff className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
-              )}
-              {isEnding ? endingLabel : endCallLabel}
-            </Button>
-          )}
-        </div>
+        {!mergeTrailingIntoCluster && (
+          <div className="flex shrink-0 items-stretch gap-2">{trailingButtons}</div>
+        )}
       </div>
     </div>
   );
