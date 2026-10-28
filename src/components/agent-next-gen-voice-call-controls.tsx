@@ -2483,10 +2483,15 @@ export function VoiceCallControls({
             // behind it, so THIS specific control stays filled/
             // prominent even in the rail whenever `showLeaveChoice` is
             // true, same as the always-filled wide rendering below.
+            // `size="icon-lg"` (36px, was the 40px `icon-xl` every other
+            // control in this row — CompactCallControlButton's own doc
+            // comment — deliberately shares) — per explicit follow-up
+            // request ("make this button a bit smaller"), scoped to just
+            // this one filled End Call button, not the whole row.
             <Button
               variant="destructive"
-              size="icon"
-              className="h-10 w-10 shrink-0"
+              size="icon-lg"
+              className="shrink-0"
               onClick={handleEndCallButtonClick}
               disabled={isEnding}
               title={isEnding ? endingLabel : endCallLabel}
@@ -2495,7 +2500,7 @@ export function VoiceCallControls({
               {isEnding ? (
                 <Spinner variant="circle" size="sm" color="inverse" label="Hanging up" />
               ) : (
-                <PhoneOff className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
+                <PhoneOff className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
               )}
             </Button>
           )
