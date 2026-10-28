@@ -366,6 +366,23 @@ interface ConferencePickerPerson {
   name: string;
   subtitle: string;
   avatarClassName: string;
+  /** Whether this pick is a real agent/skill (`true`, every row from the
+   *  Favorites/Agents/Skills tabs below) or a raw dialed number (`false`,
+   *  the Dial Pad's own synthesized `dialedPerson`) — carried through
+   *  `onSelect` → `VoiceCallConsult.isInternalAgent` → the merged
+   *  `CallColleague.isInternalAgent` this bar's own roster already reads
+   *  (that field's own doc comment, below) to decide whether a row gets a
+   *  Transfer icon. Required (not optional) specifically so every NEW
+   *  `ConferencePickerPerson` source added later has to make this call
+   *  explicitly rather than silently defaulting to "agent" — a confirmed
+   *  bug report ("ensure that an outbound to a generic phone number does
+   *  not have a transfer icon... Transfer is only relevant to another
+   *  agent or skill"): `handleMergeConsult` used to drop this distinction
+   *  entirely, so a colleague added via a completed CONSULT (any of these
+   *  three tabs, including a Dial Pad number) always read as `isInternalAgent
+   *  ?? true` once merged — correct for the seed/demo data (which sets this
+   *  field directly), wrong for the real live flow. */
+  isInternalAgent: boolean;
 }
 
 /** "Favorites" — per explicit request ("no real multi-party state"), this
@@ -382,6 +399,7 @@ const CONFERENCE_FAVORITES: ConferencePickerPerson[] = CREATE_NEW_AGENTS.slice(0
   name: agent.name,
   subtitle: agent.role,
   avatarClassName: agent.avatarClassName,
+  isInternalAgent: true,
 }));
 /** "Agents" — a wider slice of the same real roster, per explicit request
  *  ("same as the reference and our own 'Add Participant' icon"), not a
@@ -392,6 +410,7 @@ const CONFERENCE_AGENTS: ConferencePickerPerson[] = CREATE_NEW_AGENTS.slice(0, 8
   name: agent.name,
   subtitle: agent.role,
   avatarClassName: agent.avatarClassName,
+  isInternalAgent: true,
 }));
 /** The FULL real roster (not the 8-item idle slice above) — only ever read
  *  once an agent actually types something into the new Agents/Skills search
@@ -407,6 +426,7 @@ const CONFERENCE_ALL_AGENTS: ConferencePickerPerson[] = CREATE_NEW_AGENTS.map((a
   name: agent.name,
   subtitle: agent.role,
   avatarClassName: agent.avatarClassName,
+  isInternalAgent: true,
 }));
 /** "Skills" — hand-authored, matching the same skill-name vocabulary
  *  already used elsewhere in this app (`EMAIL_FOCUS_*`'s own `skillName`
@@ -426,6 +446,7 @@ const CONFERENCE_SKILLS: ConferencePickerPerson[] = [
   name,
   subtitle: "Skill queue",
   avatarClassName: "bg-lyra-bg-surface-canvas text-lyra-fg-secondary",
+  isInternalAgent: true,
 }));
 
 type ConferenceTabKey = "favorites" | "agents" | "skills";
@@ -562,6 +583,11 @@ function ConferencePicker({
       // fallback) already uses for an identity with no other real color of
       // its own — reused, not a new one-off color.
       avatarClassName: "bg-lyra-bg-primary text-lyra-fg-on-primary",
+      // Per explicit request ("ensure that an outbound to a generic phone
+      // number does not have a transfer icon... Transfer is only relevant
+      // to another agent or skill") — a raw dialed number is never a real
+      // colleague to hand the call off to.
+      isInternalAgent: false,
     };
     setSetupStep({ stage: "connecting", person: dialedPerson });
   };
@@ -885,6 +911,11 @@ export interface CallColleague {
 interface VoiceCallConsult {
   id: string;
   name: string;
+  /** Carried straight through from `ConferencePickerPerson.isInternalAgent`
+   *  (that field's own doc comment) to the merged `CallColleague` this
+   *  consult becomes on `handleMergeConsult` — whether this pick gets a
+   *  Transfer icon once it's a real roster row. */
+  isInternalAgent: boolean;
   /** Whether the CONSULT leg itself (not the primary customer) is
    *  currently the one on hold — per explicit follow-up request ("when
    *  consulting with another person need to provide a way to swap and hold
@@ -2017,7 +2048,10 @@ export function VoiceCallControls({
   // into what's now a three-(or-more-)way conference.
   const handleMergeConsult = () => {
     if (!consult) return;
-    setColleagues((prev) => [...prev, { id: consult.id, name: consult.name, isOnHold: false }]);
+    setColleagues((prev) => [
+      ...prev,
+      { id: consult.id, name: consult.name, isOnHold: false, isInternalAgent: consult.isInternalAgent },
+    ]);
     setConsult(undefined);
     setOnHold(false);
   };
@@ -3263,7 +3297,12 @@ export function VoiceCallControls({
               <ConferencePicker
                 onSelect={(person) => {
                   setConferenceOpen(false);
-                  setConsult({ id: person.id, name: person.name, isOnHold: false });
+                  setConsult({
+                    id: person.id,
+                    name: person.name,
+                    isOnHold: false,
+                    isInternalAgent: person.isInternalAgent,
+                  });
                   setOnHold(true);
                   // Per explicit follow-up request ("have the participant
                   // dropdown collapsed when in a consult. It helps keep
