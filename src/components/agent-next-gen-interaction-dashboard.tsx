@@ -254,10 +254,31 @@ export interface Thread {
    *  voice call in a hold state") — deliberately scoped to this EXPLICIT,
    *  agent-pressed hold only, not the separate implicit "navigated away
    *  from this interaction" on-hold reading (`channelOnHold`'s other half,
-   *  each page's own LeftNav `channels` builder) — that implicit case has no
-   *  single well-defined "since when" moment the way a real button press
-   *  does. */
+   *  each page's own LeftNav `channels` builder) — see `backgroundedSinceTick`
+   *  just below for that other case's own, now-tracked "since when" moment. */
   heldSinceTick?: number;
+  /** The `clockTick` value at the moment this thread's own interaction most
+   *  recently STOPPED being the active one — the implicit-hold counterpart
+   *  to `heldSinceTick` just above, per a later explicit follow-up request
+   *  ("for 'on hold' states, always show a timer along with the wording
+   *  'on hold' even when not selected"): that earlier field's own doc
+   *  comment used to say the implicit "navigated away" case "has no single
+   *  well-defined since-when moment the way a real button press does" —
+   *  this field is the correction: switching focus AWAY from an
+   *  interaction that has a live voice thread is exactly as well-defined a
+   *  moment as a Hold button press, it just wasn't being captured. Set by
+   *  each page's own `switchActiveInteraction` the instant this
+   *  interaction stops being `activeInteractionId` while `findLiveVoiceThread`
+   *  finds a live thread on it; cleared back to `undefined` the instant it
+   *  becomes active again (so the timer always counts from the MOST
+   *  RECENT time it was backgrounded, not accumulated across multiple
+   *  switch-away/switch-back cycles). Drives `OnHoldPill`'s own
+   *  `elapsedLabel` (`OnHoldBadge.tsx`) whenever `heldByAgent` isn't also
+   *  true — see each page's own `elapsedOverride` computation for exactly
+   *  how the two are combined into one always-present timer. Desk/Phase 2
+   *  only — Advanced/Phase 1 doesn't render `OnHoldPill`/this card's hold
+   *  visuals at all (a separate, earlier, still-standing decision). */
+  backgroundedSinceTick?: number;
   /** Every OTHER person currently merged into this voice call (beyond the
    *  primary customer and the agent) — per explicit follow-up request
    *  ("show all participant names in the assignment card also with a
@@ -274,7 +295,7 @@ export interface Thread {
    *  `undefined` whenever a fresh voice `Thread` replaces this one (every
    *  `newChannel` builder simply omits it), same convention `heldByAgent`
    *  already follows. */
-  colleagues?: { id: string; name: string }[];
+  colleagues?: { id: string; name: string; isInternalAgent?: boolean }[];
   /** REMOVED (was `interactionId?: string`) — a plain synthesized digit
    *  shown on this Thread's `ChannelToggle` tooltip as "#{interactionId}",
    *  genuinely redundant now that `Contact.contactId` exists as the real,

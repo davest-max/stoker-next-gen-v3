@@ -1570,6 +1570,14 @@ export function AgentWorkspaceAdvancedPage({
   // `ADVANCED_ASSIGNMENT_SORT_OPTIONS`) — so this control starts out
   // reproducing the exact same order as before it existed.
   const [assignmentSortDirection, setAssignmentSortDirection] = useState<AssignmentSortDirection>("desc");
+  // Per explicit follow-up request ("voice call automatically sorts to
+  // the top of the assignment list until other sort orders are chosen...
+  // any and all voice calls") — same mechanism/doc comment as Desk/Phase
+  // 2's own identical state (AgentWorkspace2WithDeskPage.tsx): tracks
+  // whether the agent has EVER actually touched the sort control, since
+  // `assignmentSort`/`assignmentSortDirection` already default to real
+  // values with no "nothing chosen yet" state of their own.
+  const [assignmentSortManuallySet, setAssignmentSortManuallySet] = useState(false);
   // Drives `AssignmentsExpandCollapseAllButton` — see that component's own
   // doc comment for why this is a one-shot "which direction does the NEXT
   // click bulk-apply" toggle (`channelsAllExpanded`) plus a version nonce
@@ -6712,38 +6720,32 @@ export function AgentWorkspaceAdvancedPage({
   // own slide-up entrance vs. the left nav's plain fade-in) — every other
   // prop is identical no matter where this ends up rendering.
   //
-  // `effectiveVoiceControlsPosition` — per explicit "Change of direction"
-  // follow-up ("when [the left rail] collapses the controls are on top of
-  // other information when it persists or floats. Also conferencing UI is
-  // even more complication added to a limited space... when the left rail
-  // is collapsed, and when a conferencing call is created, the controls
-  // and the conferencing UI has to go back to the bottom of the screen.
-  // Forced to go there in those instances"): this FORCES "bottom" whenever
-  // the rail is collapsed OR the displayed call has more than one other
-  // party, regardless of the agent's own STORED `voiceControlsPosition`
-  // preference — a live override, not a change to that preference itself.
-  // `voiceControlsPosition` (and the Settings page's own radio button,
-  // which reads/writes it directly) stays exactly what the agent picked;
-  // only which value actually GATES the two render call sites below
-  // changes. Confirmed via follow-up Q&A: reverts automatically the
-  // instant both conditions clear (this is a plain derived value,
-  // recomputed every render — there's nothing to explicitly revert), and
-  // "a conferencing call" covers BOTH mechanisms that can put more than
-  // one other party on the line — the internal `Thread.colleagues`
-  // conference AND the separate Merge Calls bridge
-  // (`Interaction.mergedInteractionIds`) — not just one of the two. See
+  // `effectiveVoiceControlsPosition` — used to ALSO force "bottom"
+  // whenever the displayed call had more than one other party (a
+  // conference or a Merge Calls bridge), on top of the rail being
+  // collapsed/narrow; per a later explicit reversal, the new card/row-
+  // based consult and conference-roster UI is meant to fit directly in
+  // the open rail, so a conference no longer forces this on its own —
+  // only the rail's own collapsed/narrow state does now. See
   // `AgentWorkspace2WithDeskPage.tsx`'s identical derived value for the
   // full doc comment (`!navOpen` vs. `isNavNarrow` reasoning included).
-  const hasConference =
-    !!displayedVoiceCallThread?.colleagues?.length ||
-    !!displayedVoiceCallInteraction?.mergedInteractionIds?.length;
   const effectiveVoiceControlsPosition: VoiceControlsPosition =
-    !navOpen || isNavNarrow || hasConference ? "bottom" : voiceControlsPosition;
+    !navOpen || isNavNarrow ? "bottom" : voiceControlsPosition;
+  // See `AgentWorkspace2WithDeskPage.tsx`'s identical const for the full
+  // doc comment ("voice call automatically sorts to the top of the
+  // assignment list until other sort orders are chosen... any and all
+  // voice calls").
+  const sortedAssignmentsForDisplay = (() => {
+    const sorted = sortAssignments(interactions, assignmentSort, assignmentSortDirection);
+    if (assignmentSortManuallySet) return sorted;
+    const withLiveVoice = sorted.filter((i) => !!findLiveVoiceThread(i));
+    const withoutLiveVoice = sorted.filter((i) => !findLiveVoiceThread(i));
+    return [...withLiveVoice, ...withoutLiveVoice];
+  })();
   const renderVoiceCallControls = (
     extraClassName: string,
     trailingControlsPlain?: boolean,
-    mergeTrailingIntoCluster?: boolean,
-    rosterStacked?: boolean
+    mergeTrailingIntoCluster?: boolean
   ) => {
     if (
       !displayedVoiceCallInteraction ||
@@ -6761,11 +6763,14 @@ export function AgentWorkspaceAdvancedPage({
         className={extraClassName}
         trailingControlsPlain={trailingControlsPlain}
         mergeTrailingIntoCluster={mergeTrailingIntoCluster}
-        rosterStacked={rosterStacked}
         // Per explicit request ("change the avatar from user to headset if
         // the voice call is with an agent or skill") — applies regardless
         // of which host is rendering this (bottom bar or left nav).
         isAgentOrSkill={getMergeCandidateKind(interaction) !== "customer"}
+        // Populates the Consult/Transfer popover's own "Select Outbound
+        // Skill" step — the exact same constant this page already uses for
+        // Quick Dial/`AddChannelAdHocButton`, not a fresh list.
+        skillOptions={OUTBOUND_CONFIG.skillOptions}
         conferenceOpen={conferenceOpen}
         onConferenceOpenChange={handleConferenceOpenChange}
         consultAnchorRef={consultAnchorRef}
@@ -7146,12 +7151,18 @@ export function AgentWorkspaceAdvancedPage({
               // away").
               count={interactions.length - foldedIntoConferenceIds.size}
               sort={assignmentSort}
-              onSortChange={setAssignmentSort}
+              onSortChange={(v) => {
+                setAssignmentSort(v);
+                setAssignmentSortManuallySet(true);
+              }}
               // Per explicit request — see `ADVANCED_ASSIGNMENT_SORT_
               // OPTIONS`'s own doc comment above.
               sortOptions={ADVANCED_ASSIGNMENT_SORT_OPTIONS}
               sortDirection={assignmentSortDirection}
-              onSortDirectionChange={setAssignmentSortDirection}
+              onSortDirectionChange={(d) => {
+                setAssignmentSortDirection(d);
+                setAssignmentSortManuallySet(true);
+              }}
               allExpanded={channelsAllExpanded}
               onToggleAllExpanded={handleToggleAllChannelsExpanded}
               // See `AssignmentsSectionCaption`'s own doc comment on
@@ -7342,22 +7353,38 @@ export function AgentWorkspaceAdvancedPage({
                   sits inline like any other rail content instead — pushing
                   the assignment cards below it down, scrolling with them,
                   no separate anchor/measurement machinery needed.
-                  `trailingControlsPlain`/`mergeTrailingIntoCluster`/
-                  `rosterStacked` (2nd–4th args) stay on regardless — the
+                  `trailingControlsPlain`/`mergeTrailingIntoCluster`
+                  (2nd–3rd args) stay on regardless — the
                   rail's own content width here is just as narrow as the
                   old floating card was, so the same compact layout still
                   applies; see each prop's own doc comment
                   (agent-next-gen-voice-call-controls.tsx) for what each
-                  one does. The `rounded-lyra-sm border` + `mb-3` in the
-                  className below is this component's own normal card look
-                  (previously supplied by the now-removed `Draggable`
-                  wrapper's own border/shadow), so it still reads as a
-                  distinct card sitting above the assignment list rather
-                  than bleeding into it. */}
+                  one does. The className below used to ALSO carry its own
+                  `rounded-lyra-sm border ... px-3 py-2` — a second, nested
+                  card border/padding wrapped around `VoiceCallControls`'s
+                  own `cardRef` div, which already has its own identical
+                  border/rounded/padding built in (this component's normal
+                  card look) — removed per explicit follow-up ("even this
+                  div nested inside the larger div I don't want. Just
+                  one"). That still left `VoiceCallControls`'s own OUTER
+                  wrapper div with ITS permanent base `bg-lyra-bg-surface-
+                  base px-6 py-3` (see that div's own doc comment — meant
+                  for the floating/bottom-bar host, where this wrapper
+                  supplies the gutter the card floats within), stacking a
+                  SECOND, invisible-but-real inset on top of `cardRef`'s
+                  own `px-3 py-2` — squeezing the controls narrower than
+                  this rail slot actually has room for. Per a further
+                  explicit follow-up ("spread the controls out into this
+                  div's width... keep the card's border/background, just
+                  trim the padding"): `bg-transparent px-0 py-0` cancels
+                  that outer inset/background here, the same cancellation
+                  the bottom-bar call site below already passes for the
+                  identical reason — leaving `cardRef`'s own border/
+                  background/padding as the only inset, now using this
+                  slot's full width. */}
               {effectiveVoiceControlsPosition === "aboveAssignments" &&
                 renderVoiceCallControls(
-                  "rounded-lyra-sm border border-lyra-border-subtle px-3 py-2 mb-3 animate-in fade-in-0 duration-200",
-                  true,
+                  "bg-transparent px-0 py-0 mb-3 animate-in fade-in-0 duration-200",
                   true,
                   true
                 )}
@@ -7420,10 +7447,12 @@ export function AgentWorkspaceAdvancedPage({
                   type, which opens as its own row instead (see
                   handleStartCall's merge-by-type+address logic). Sorted per
                   `assignmentSort` (`AssignmentsSectionCaption`'s own sort
-                  button) — `interactions` itself stays in insertion order
+                  button), plus the "live voice calls float to top" default
+                  partition (`sortedAssignmentsForDisplay`'s own doc
+                  comment) — `interactions` itself stays in insertion order
                   for everything else that reads it, only this rendering
                   reorders a copy. */}
-              {sortAssignments(interactions, assignmentSort, assignmentSortDirection).map((interaction) => {
+              {sortedAssignmentsForDisplay.map((interaction) => {
                 // Merged-calls combined tile — see `renderedMergeGroupIds`'s
                 // own doc comment above. A later member of an already-
                 // rendered group renders nothing of its own here; the
@@ -7691,6 +7720,35 @@ export function AgentWorkspaceAdvancedPage({
                     // formula exactly. Outcome (above) stays visible the
                     // whole time regardless, per the original request.
                     showConsultTransfer: false,
+                    // Per explicit follow-up report/screenshot ("add the
+                    // same consult flow that appears in the voice controls
+                    // [to this kebab row]. The popup will appear near the
+                    // dropdown row"): `showConsultTransfer: false` above
+                    // keeps "Consult / Transfer" inside this row's own
+                    // kebab (lyra-ui's `keepConsultTransfer`), but until now
+                    // nothing ever wired that dropdown entry's `onClick` —
+                    // see `ChannelRowProps.onConsultTransferClick`'s own doc
+                    // comment (channel-row.tsx) for the new mechanism this
+                    // reuses: fired with THIS ROW's own root element as the
+                    // anchor, same `consultAnchorRef`/`setConferenceOpen`
+                    // pair the record-header `ChannelToggle` kebab already
+                    // drives elsewhere on this page — one shared popover,
+                    // multiple entry points. This row's own interaction
+                    // isn't necessarily the one currently displayed, so it
+                    // switches to it FIRST (per explicit confirmation) —
+                    // otherwise the popover would open anchored here but
+                    // the bar/`ConsultBanner` it drives would still be
+                    // showing a completely different call.
+                    onConsultTransferClick:
+                      c.type === "voice"
+                        ? (anchorEl: HTMLElement) => {
+                            if (activeInteractionId !== interaction.id) {
+                              switchActiveInteraction(interaction.id);
+                            }
+                            consultAnchorRef.current = anchorEl;
+                            setConferenceOpen(true);
+                          }
+                        : undefined,
                     // Per explicit follow-up request ("always have the more
                     // options available in the interactionNavItem") — the
                     // kebab is unconditional now for every row, superseding

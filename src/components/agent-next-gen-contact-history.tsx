@@ -1123,6 +1123,7 @@ export function ContactHistoryCard({
   historyByRange,
   hideCustomerNames,
   onOpenAllContacts,
+  allContactsButtonLabel = "All Contacts",
 }: {
   /** Fired by clicking anywhere on a row — opens this entry's summary in
    *  `AgentNextGenPage`'s shared right-docked `InteriorPanel` slot (main
@@ -1167,6 +1168,16 @@ export function ContactHistoryCard({
    *  Omit to render the card with no such button at all (no consumer
    *  currently does this — all 3 tiers pass it). */
   onOpenAllContacts?: () => void;
+  /** Overrides the button's own visible text (default `"All Contacts"`) —
+   *  per explicit follow-up request/screenshot: Desk's own destination page
+   *  was later renamed "Search App" (see `EmailFocusCard`'s identical prop
+   *  doc comment for that history), and this button's label had been left
+   *  behind, still reading "All Contacts" even on the pages that pass
+   *  Desk's `handleOpenAllContacts`. Advanced never renamed its own
+   *  destination (still titled "All Contacts" there, and doesn't even pass
+   *  `onOpenAllContacts` to begin with — see that page's own call site),
+   *  so the default stays unchanged for it. */
+  allContactsButtonLabel?: string;
 }) {
   // Default "Last 48 Hours" per explicit request (was "Today") — see
   // `ContactHistoryDateFilterChip`'s own `value` state above for why this
@@ -1261,7 +1272,7 @@ export function ContactHistoryCard({
           // later ("make it an outline button - it's too prominent") back
           // to the original outline treatment, keeping only the height fix.
           <Button variant="outline" size="md" onClick={onOpenAllContacts}>
-            All Contacts
+            {allContactsButtonLabel}
           </Button>
         )
       }

@@ -32,7 +32,8 @@ import { Badge } from "@nicecxone/lyra-ui";
  *    why `relative`" reasoning) — parked at the OPPOSITE corner
  *    (`right-0 top-0`) so it never collides with that badge's `left-0
  *    top-0`.
- *  - `OnHoldPill` — expanded (full detail) card: a small inline pill meant
+ *  - `OnHoldPill` — expanded (full detail) card: a small inline red label
+ *    (no pill background — see this function's own doc comment) meant
  *    for `InteractionNavItem`'s own `headerAction` slot (rendered at the
  *    end of the card's header row, next to the customer name) — the only
  *    slot that component exposes for arbitrary extra content there.
@@ -44,7 +45,18 @@ export function OnHoldCornerBadge({ className }: { className?: string }) {
       size="sm"
       aria-label="Call on hold"
       className={cn(
-        "pointer-events-none absolute right-0 top-0 z-10 h-[18px] w-[18px] min-w-0 border border-transparent bg-lyra-status-warning-strong p-0.5 text-lyra-fg-on-primary",
+        // Red (critical), not amber (warning) — per explicit follow-up
+        // request ("change yellow background of the hold element to a
+        // light pink... Match the hold div from the voice control
+        // attached"): matches the voice-controls bar's own Hold/Resume
+        // button (`agent-next-gen-voice-call-controls.tsx`'s identical
+        // `text-lyra-status-critical-strong bg-lyra-status-critical-subtle`
+        // pair) and `ParticipantChip`'s own per-participant on-hold tint,
+        // rather than a third, inconsistent color for the same "on hold"
+        // concept. Icon unchanged — this badge is icon-only (no text at
+        // this size), so there's nothing to remove here the way
+        // `OnHoldPill` below drops its own Pause icon.
+        "pointer-events-none absolute right-0 top-0 z-10 h-[18px] w-[18px] min-w-0 border border-transparent bg-lyra-status-critical-strong p-0.5 text-lyra-fg-on-primary",
         className
       )}
     >
@@ -71,17 +83,22 @@ export function OnHoldPill({
     <span
       aria-label={elapsedLabel ? `Call on hold ${elapsedLabel}` : "Call on hold"}
       className={cn(
-        // Reverted per explicit follow-up: a prior pass gave this chip
-        // itself a solid `warning-medium` fill + `warning-strong` border,
-        // but the "make it yellow with a warning border" request was
-        // actually meant for the whole card (see `InteractionNavItemProps.
-        // onHold`, interaction-nav-item.tsx) — this chip stays its original
-        // plain, light `warning-subtle` fill with no border.
-        "inline-flex shrink-0 items-center gap-1 rounded-full bg-lyra-status-warning-subtle px-2 py-0.5 lyra-body-xs-emphasis text-lyra-status-warning-strong",
+        // Plain red text, no pill background — per the later move away
+        // from pill-shaped consult/conference UI entirely ("all pill-
+        // shaped elements in this whole flow"): matches the equally
+        // pill-less red "On Hold · MM:SS" line already added under the
+        // main call-duration clock in the voice-controls bar itself
+        // (`agent-next-gen-voice-call-controls.tsx`), rather than this
+        // being the one remaining pill-shaped holdout. Same
+        // `text-lyra-status-critical-strong` token every other "on hold"
+        // surface in the app already shares.
+        "inline-flex shrink-0 items-center gap-1 lyra-body-xs-emphasis text-lyra-status-critical-strong",
         className
       )}
     >
-      <Pause className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+      {/* Pause icon removed outright — per the same explicit follow-up
+          ("remove this hold icon from the on hold component") — this is
+          just its own text, no leading glyph. */}
       On Hold
       {elapsedLabel && <span className="tabular-nums">· {elapsedLabel}</span>}
     </span>

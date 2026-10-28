@@ -104,7 +104,7 @@
 // caller has a genuine contact match, same "initials over generic icon
 // once known" split that avatar convention already uses.
 import React, { useState, useRef, useEffect } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   Button,
@@ -117,8 +117,13 @@ import {
   ActionIconButton,
   Tag,
   SearchInput,
-  useScrollChevrons,
-  ScrollChevronButton,
+  Select,
+  PhoneInput,
+  isPhoneNumberComplete,
+  formatPhoneForDisplay,
+  PHONE_COUNTRIES,
+  type PhoneValue,
+  type PhoneCountry,
 } from "@nicecxone/lyra-ui";
 import { CREATE_NEW_AGENTS } from "@nicecxone/lyra-ui/agents-data";
 import {
@@ -141,6 +146,7 @@ import {
   MessageSquare,
   Headset,
   ChevronRight,
+  ChevronDown,
   Users,
   Split,
   Merge,
@@ -455,10 +461,50 @@ type ConferenceTabKey = "favorites" | "agents" | "skills";
  *  `popoverClassName="z-[9999] w-[440px]"` — "wider than the default
  *  360px... that row still doesn't fit the default width"), not a value
  *  picked fresh here. */
+// Believable delay for the new "Connecting to {name}..." step below — same
+// scale/naming convention `VoiceCallControls`' own `HANG_UP_HOLD_MS`/
+// `HANG_UP_EXIT_MS` already use for their fake-async hang-up transition,
+// just module-level here since `ConferencePicker` is its own top-level
+// component, not a local const inside `VoiceCallControls`'s body.
+const CONSULT_CONNECTING_MS = 1500;
+
+// This picker's own multi-step setup flow, per explicit follow-up request
+// ("When an agent or skill or dialpad number is selected from the
+// consult/transfer popup, include the need to select a skill and show the
+// connection animation before the call connects"): picking someone used to
+// call `onSelect` immediately and synchronously — no skill assignment, no
+// sense that a real call is being placed. `"list"` is the original
+// Favorites/Agents/Skills tab view (unchanged); `"select-skill"` and
+// `"connecting"` are new, and REPLACE that view while active rather than
+// layering on top of it — same "one popover, one view at a time" shape the
+// bar's own `ConsultBanner` already uses in place of its normal controls.
+// Deliberately local to THIS component, not lifted to `VoiceCallControls` —
+// it's purely about HOW this picker gets to a final selection, not a
+// decision any caller needs visibility into; `onSelect` (below) still only
+// ever fires once, at the very end, with the exact same meaning/shape it
+// always has ("the agent is now consulting/transferring to this person") —
+// callers need no changes at all.
+type ConsultSetupStep =
+  | { stage: "list" }
+  | { stage: "select-skill"; person: ConferencePickerPerson }
+  | { stage: "connecting"; person: ConferencePickerPerson }
+  /** The "Dial Pad" row's own screen — per explicit follow-up request
+   *  ("make the dialpad row in the consult popup work. use the dialpad
+   *  flow and behavior of the new outbound flow"): a `PhoneInput` +
+   *  "Outbound Skill" `Select` + a "Call" button, the same shape lyra-ui's
+   *  own `CreateNew` (New Outbound) dialpad group screen already uses —
+   *  confirmed via follow-up Q&A to land in the SAME "Connecting to
+   *  {number}..." stage every other pick already goes through (not New
+   *  Outbound's own inline button-spinner treatment), so a dialed number
+   *  behaves identically to picking a real Favorites/Agents/Skills row
+   *  from here on. */
+  | { stage: "dialpad" };
+
 function ConferencePicker({
   onSelect,
   joinableCall,
   onJoinCall,
+  skillOptions,
 }: {
   onSelect: (person: ConferencePickerPerson) => void;
   /** See `VoiceCallControlsProps.joinableCall`'s own doc comment — the one
@@ -468,10 +514,72 @@ function ConferencePicker({
    *  below. */
   joinableCall?: { id: string; name: string };
   onJoinCall?: (interactionId: string) => void;
+  /** Populates the new "Select Outbound Skill" step's own `Select` (see
+   *  `ConsultSetupStep`'s own doc comment) — same `{value, label}[]` shape
+   *  `AddChannelAdHocButton` already takes as a prop (agent-next-gen-add-
+   *  channel-button.tsx), reused here rather than importing a fresh list:
+   *  each page passes its own existing `OUTBOUND_CONFIG.skillOptions`
+   *  straight through (`VoiceCallControlsProps.skillOptions`'s own doc
+   *  comment). */
+  skillOptions: { value: string; label: string }[];
 }) {
   const [tab, setTab] = useState<ConferenceTabKey>("favorites");
   const isSkillsTab = tab === "skills";
   const isFavoritesTab = tab === "favorites";
+  // See `ConsultSetupStep`'s own doc comment.
+  const [setupStep, setSetupStep] = useState<ConsultSetupStep>({ stage: "list" });
+  const [skillId, setSkillId] = useState(skillOptions[0]?.value ?? "");
+  // Dial Pad's own number field — same `PhoneValue` shape (`countryCode` +
+  // raw `number` digits) `PhoneInput` itself uses, so there's no local
+  // re-shaping of what it hands back on every keystroke. `dialAttempted`
+  // mirrors `create-new.tsx`'s own `phoneDialAttempted` — forces the
+  // field's validation error to show the moment "Call" is pressed with an
+  // incomplete number, rather than only after it's blurred.
+  const [dialPhone, setDialPhone] = useState<PhoneValue>({ countryCode: "us", number: "" });
+  const [dialAttempted, setDialAttempted] = useState(false);
+  const dialCountry =
+    PHONE_COUNTRIES.find((c: PhoneCountry) => c.code === dialPhone.countryCode) ?? PHONE_COUNTRIES[0];
+  const isDialNumberValid = isPhoneNumberComplete(dialPhone.number, dialCountry);
+  const handleDialNumber = () => {
+    if (!isDialNumberValid) {
+      setDialAttempted(true);
+      return;
+    }
+    const dialedPerson: ConferencePickerPerson = {
+      // Namespaced so it can never collide with a real roster id — same
+      // `adhoc:` convention `create-new.tsx`'s own ad-hoc contact uses.
+      id: `adhoc:${dialCountry.dial}${dialPhone.number}`,
+      name: formatPhoneForDisplay(`${dialCountry.dial}${dialPhone.number}`),
+      subtitle: "Dialed number",
+      // `bg-lyra-bg-primary`/`text-lyra-fg-on-primary` — per explicit
+      // follow-up request ("don't allow a white avatar, or any avatar
+      // color that is too close to the background colors across the
+      // project"): the old `bg-lyra-bg-surface-container-subtle` neutral
+      // tint is the SAME token this bar's own cards/popovers already use
+      // for their background, so that avatar circle was literally
+      // invisible against them. This is the same solid, high-contrast
+      // pairing the main identity avatar (this file's own no-contact-match
+      // fallback) already uses for an identity with no other real color of
+      // its own — reused, not a new one-off color.
+      avatarClassName: "bg-lyra-bg-primary text-lyra-fg-on-primary",
+    };
+    setSetupStep({ stage: "connecting", person: dialedPerson });
+  };
+  // Fires the REAL, external `onSelect` once the "Connecting..." stage has
+  // played out — this is the only place that prop is ever called now (the
+  // Call button below no longer calls it directly), so every existing
+  // caller's own `onSelect` handler (closes the popover, sets `consult`,
+  // holds the primary customer — unchanged) still fires at exactly the
+  // moment the agent should land in `ConsultBanner`, just a beat later than
+  // before. Re-fires (harmlessly re-running the same timeout) if `onSelect`
+  // itself is ever a new function reference mid-flight — keyed on
+  // `setupStep` instead would risk calling a stale closure.
+  useEffect(() => {
+    if (setupStep.stage !== "connecting") return;
+    const timeout = window.setTimeout(() => onSelect(setupStep.person), CONSULT_CONNECTING_MS);
+    return () => window.clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setupStep]);
   // Per explicit follow-up request ("add a search field for Agents, Skills
   // in the transfer popup") — Favorites intentionally has no search box of
   // its own (it's already just 4 hand-picked people, nothing to search),
@@ -489,6 +597,105 @@ function ConferencePicker({
       : tab === "agents"
         ? CONFERENCE_AGENTS
         : CONFERENCE_SKILLS;
+  // Dial Pad — per explicit follow-up request ("make the dialpad row in
+  // the consult popup work. use the dialpad flow and behavior of the new
+  // outbound flow"): same `PhoneInput` + "Outbound Skill" `Select` shape
+  // lyra-ui's own `CreateNew` (New Outbound) dialpad group screen already
+  // uses, reused rather than reinvented — see CONTRIBUTING.md §1. Replaces
+  // the tabs/list view outright, same "one popover, one view" shape every
+  // other `ConsultSetupStep` stage already follows.
+  if (setupStep.stage === "dialpad") {
+    return (
+      <div
+        className="flex w-[440px] flex-col gap-4 p-4"
+        onKeyDown={(e) => {
+          // `PhoneInput` has no `onKeyDown`/`onSubmit` prop of its own —
+          // same reasoning `create-new.tsx`'s own Enter-to-dial comment
+          // gives — caught here via ordinary DOM bubbling instead.
+          if (e.key === "Enter") {
+            e.preventDefault();
+            handleDialNumber();
+          }
+        }}
+      >
+        <PhoneInput value={dialPhone} onChange={setDialPhone} forceShowError={dialAttempted} />
+        <Select
+          label="Outbound Skill"
+          placeholder="Select Outbound Skill"
+          value={skillId || undefined}
+          onValueChange={setSkillId}
+          options={skillOptions}
+        />
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="outline" size="md" onClick={() => setSetupStep({ stage: "list" })}>
+            Cancel
+          </Button>
+          <Button variant="default" size="md" onClick={handleDialNumber}>
+            Call
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  // "Select Outbound Skill" — only for an Agent/Favorites pick (see the
+  // Call button's own `onClick` below for why a Skills-tab pick skips this
+  // entirely: that selection already IS the skill, asking again would be
+  // pure redundancy). Replaces the tabs/list view outright rather than
+  // layering over it — same "one popover, one view" shape `ConsultBanner`
+  // already uses in place of this bar's normal controls once a consult
+  // starts.
+  if (setupStep.stage === "select-skill") {
+    const { person } = setupStep;
+    return (
+      <div className="flex flex-col w-[440px] gap-4 p-4">
+        <div className="flex items-center gap-3">
+          <div
+            className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-full lyra-body-sm-emphasis", person.avatarClassName)}
+            aria-hidden="true"
+          >
+            {initialsFor(person.name)}
+          </div>
+          <div className="min-w-0">
+            <div className="lyra-body-md-emphasis truncate text-lyra-fg-primary">{person.name}</div>
+            <div className="lyra-body-sm truncate text-lyra-fg-secondary">{person.subtitle}</div>
+          </div>
+        </div>
+        {/* Same "Outbound Skill" field (label/placeholder/shape) the Quick
+            Dial/`AddChannelAdHocButton` flow already uses (agent-next-gen-
+            add-channel-button.tsx) — reused, not reinvented, for the same
+            "assign a skill before a call connects" moment. */}
+        <Select
+          label="Outbound Skill"
+          placeholder="Select Outbound Skill"
+          value={skillId || undefined}
+          onValueChange={setSkillId}
+          options={skillOptions}
+        />
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="outline" size="md" onClick={() => setSetupStep({ stage: "list" })}>
+            Cancel
+          </Button>
+          <Button variant="default" size="md" onClick={() => setSetupStep({ stage: "connecting", person })}>
+            Connect
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  // "Connecting..." — the `useEffect` above fires the real `onSelect` after
+  // `CONSULT_CONNECTING_MS`, which is what actually closes this popover and
+  // lands the agent in `ConsultBanner`; nothing here does that itself, so
+  // there's no Cancel at this stage (same "no backing out once underway"
+  // the bar's own hang-up spinner already follows).
+  if (setupStep.stage === "connecting") {
+    const { person } = setupStep;
+    return (
+      <div className="flex w-[440px] flex-col items-center justify-center gap-3 p-8">
+        <Spinner variant="circle" size="md" label="Connecting" />
+        <div className="lyra-body-md text-lyra-fg-secondary">Connecting to {person.name}...</div>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col w-[440px]">
       {/* "Join live call" — per explicit request ("a user has called an
@@ -558,17 +765,21 @@ function ConferencePicker({
           separated from it by `ListItem`'s own bottom divider (`divider`
           left at its default `true` here — every row inside the list below
           explicitly passes `divider={false}` instead, since those read as
-          one continuous block). No `onClick` at all (was a "not wired up
-          yet" toast) — per explicit follow-up request ("remove all of the
-          notifications that trigger upon any action"), this and every
-          other decorative control in this bar now renders with no toast
-          AND no fake handler standing in for one; there's no real "dial an
-          arbitrary number to consult" flow in this prototype yet, and
-          nothing here pretends otherwise anymore either. */}
+          one continuous block). Now wired to the "dialpad" setup step —
+          per a later explicit follow-up ("make the dialpad row in the
+          consult popup work") — resetting the number/skill fields fresh
+          every time it's opened, same as tapping a real person's Call
+          icon resets `skillId` below. */}
       <ListItem
         leading={<Grid3x3 className="h-5 w-5 text-lyra-fg-secondary" strokeWidth={1.5} aria-hidden="true" />}
         title="Dial Pad"
         trailing={<ChevronRight className="h-4 w-4 text-lyra-fg-secondary" strokeWidth={1.5} aria-hidden="true" />}
+        onClick={() => {
+          setDialPhone({ countryCode: "us", number: "" });
+          setDialAttempted(false);
+          setSkillId(skillOptions[0]?.value ?? "");
+          setSetupStep({ stage: "dialpad" });
+        }}
       />
       <div className="flex flex-col max-h-64 overflow-y-auto py-1">
         {people.map((person) => (
@@ -592,7 +803,24 @@ function ConferencePicker({
             subtitle={person.subtitle}
             trailing={
               <div className="flex items-center gap-0.5">
-                <ActionIconButton size="sm" title={`Consult with ${person.name}`} onClick={() => onSelect(person)}>
+                {/* No longer calls `onSelect` directly — per `ConsultSetupStep`'s
+                    own doc comment, a Skills-tab pick already IS the skill
+                    (straight to "Connecting..."), while an Agent/Favorites
+                    pick still needs the new "Select Outbound Skill" step
+                    first. `onSelect` itself fires later, once the
+                    "connecting" stage's own timer elapses. */}
+                <ActionIconButton
+                  size="sm"
+                  title={`Consult with ${person.name}`}
+                  onClick={() => {
+                    if (isSkillsTab) {
+                      setSetupStep({ stage: "connecting", person });
+                      return;
+                    }
+                    setSkillId(skillOptions[0]?.value ?? "");
+                    setSetupStep({ stage: "select-skill", person });
+                  }}
+                >
                   <Phone className="h-4 w-4" strokeWidth={1.5} />
                 </ActionIconButton>
                 {!isSkillsTab && (
@@ -633,6 +861,18 @@ export interface CallColleague {
    *  the reference's `toggleVoiceCallHold`/`togglePrimaryOnlyHold`/
    *  `toggleVoiceCallColleagueHold` establish. */
   isOnHold: boolean;
+  /** Whether this colleague is an internal agent/skill queue (headset
+   *  avatar) vs. a plain external number merged into the conference via the
+   *  Dial Pad (initials avatar) — per explicit follow-up request (a seeded
+   *  test conference mixing agents/skills/dialpad numbers: "why does this
+   *  phone number have a headset icon?"). Optional, defaulting to `true`
+   *  wherever it's read (`ParticipantRow`'s own call site, below) — every
+   *  colleague this bar has ever actually produced up to now came from
+   *  `ConferencePicker`'s Favorites/Agents/Skills tabs, so defaulting to
+   *  `true` keeps every existing caller's behavior unchanged; only a
+   *  caller that explicitly seeds a non-agent colleague (e.g. test data)
+   *  needs to pass `false`. */
+  isInternalAgent?: boolean;
 }
 
 /** A private, pre-merge consult in progress — ported from the reference
@@ -662,200 +902,152 @@ interface VoiceCallConsult {
   isOnHold: boolean;
 }
 
-/** One of the two toggleable parties shown in `ConsultBanner` (the primary
- *  customer or the consult target) — per explicit follow-up request ("dim
- *  the held participant's avatar in swap. Make the swap icon simply a
- *  hold icon button"), replacing the single combined "Swap" control with
- *  one hold/resume button PER party, each showing that party's own current
- *  state directly (dimmed avatar + red Resume icon when held) instead of
- *  making the agent read a sentence to find out who's live. Reuses
- *  `ParticipantChip`'s own exact hold-button styling (icon size/color,
- *  Play/Pause swap) for visual consistency with the post-merge roster —
- *  this is the same action, just before a colleague officially exists yet. */
-/** Shown in place of this bar's normal content while a consult is in
- *  progress — ported from the reference app's identical `ConsultBanner`,
- *  then revised several times (full history on the old, now-removed
- *  `ConsultBannerParty`'s own git history: a combined "Swap" control →
- *  per-party hold/resume buttons → a Transfer icon on the consult-target
- *  row). A later pass ("bring the pill idea and design to the merge
- *  consult flow. Two pills that are brought together via a little
- *  animation and lines") made both parties actual `ParticipantChip`s — the
- *  SAME bordered-pill component the post-merge roster strip uses (below)
- *  — instead of a bespoke, lower-fidelity `ConsultBannerParty` that
- *  duplicated most of that component's own markup, and connected them with
- *  the same connector line the roster uses between its own pills.
- *
- *  This pass, per a further explicit follow-up ("don't show the
- *  connecting line during merge consult until it's merged. keep the agent
- *  call a bit further away so it can physically move closer to the
- *  customer pill. Add animation so the changes are more fluid"): the
- *  connector is GONE during the consult itself — per that request, a line
- *  implies an already-joined call, which isn't true yet; it only actually
- *  appears once "Merge call" lands this person in the real roster strip
- *  below (that strip's own connector, unchanged). In its place, the
- *  consult-target pill starts noticeably further right (`x: 32`, its own
- *  `initial`, below) and SLIDES in toward the customer pill as it fades/
- *  scales in — a real "being brought closer" motion, not just a fade in
- *  place. A `type: "spring"` transition was tried first here, but at a
- *  stiffness fast enough to feel "quick" it settled in well under 100ms —
- *  too fast to actually perceive as sliding rather than just appearing.
- *  `BOUNCE_EASE`/`BOUNCE_DURATION_S` below (an explicit 0.3s tween on a
- *  slight-overshoot cubic-bezier, "easeOutBack") replaces it — a duration
- *  short enough to read as "quick" but long enough to actually watch it
- *  travel, with the overshoot giving it the same lively, not-flat feel
- *  the spring was reached for in the first place. The container's own
- *  `gap-3` (no connector line to fill
- *  that space now) is what sets the "further away" resting distance
- *  between the two pills during consult — wider than the roster's own
- *  tighter, line-bridged spacing. */
-function ConsultBanner({
-  customerLabel,
-  customerOnHold,
+/** Shown under the main bar's own controls while a consult is in progress —
+ *  replaces the old two-pill `ConsultBanner` (deleted) now that pill-shaped
+ *  consult/conference UI is gone from this whole flow. The main bar's own
+ *  identity/controls render UNCHANGED above this: its existing Hold/
+ *  Resume button already reflects `customerOnHold` correctly (see
+ *  `handleSwapConsult`), so this card only needs to represent the ONE
+ *  other party — the consult target — instead of re-showing the customer
+ *  a second time. Reuses `ParticipantRow`'s existing Hold/Transfer/Drop
+ *  actions (the same three `ConsultBanner`'s own consult-target pill
+ *  already had), plus the same "Merge call" button as before. No border/
+ *  background of its own — per explicit follow-up ("the voice controls
+ *  and participant list is within two containers, it only needs one"),
+ *  this renders inside the SAME bordered card as the main controls (its
+ *  call site supplies the one shared divider/padding for this whole
+ *  section), not as a second nested box. Any pre-existing conference
+ *  underneath (colleagues merged in before this new consult started)
+ *  doesn't need its own label/disclosure here anymore either — the main
+ *  identity block's own "Conference" `Tag` and the roster toggle (same
+ *  shared section, below this card) already render regardless of whether
+ *  a consult is active, so there's nothing left for this card to
+ *  duplicate. */
+function ConsultCard({
   consultName,
   consultOnHold,
   onToggleHold,
+  onTransfer,
   onCancel,
   onMerge,
-  onTransfer,
+  trailingControlsPlain,
 }: {
-  customerLabel: string;
-  customerOnHold: boolean;
   consultName: string;
-  /** See `VoiceCallConsult.isOnHold`'s own doc comment. */
   consultOnHold: boolean;
   onToggleHold: () => void;
+  onTransfer: () => void;
+  /** Cancels the consult outright — wired to `ParticipantRow`'s own Drop
+   *  action (with its existing inline "Drop {name}?" confirm), replacing
+   *  `ConsultBanner`'s old separate "Cancel consult" text button. */
   onCancel: () => void;
   onMerge: () => void;
-  /** Presence alone gates the Transfer icon on the consult-TARGET pill
-   *  only — see `ParticipantChip.onTransfer`'s own doc comment. */
-  onTransfer: () => void;
+  /** Same prop/meaning as `VoiceCallControlsProps`'s own (true = narrow
+   *  left-rail host) — per explicit follow-up request ("when at the
+   *  bottom of screen the merge call button is far too large. For this
+   *  width it can be in the same row as the other consult icons at a much
+   *  more normal size"): the wide/bottom-bar host now puts "Merge Call" as
+   *  a normal, content-width `size="sm"` button at the END of the SAME row
+   *  as the Hold/Transfer/Drop icons, instead of its own full-width row
+   *  below — that full-width treatment stays for the rail (confirmed via
+   *  follow-up Q&A: rail unchanged, bottom-bar only), where the row is
+   *  already narrow enough that a separate full-width button reads fine. */
+  trailingControlsPlain?: boolean;
 }) {
-  // See this function's own top doc comment for "why a tween, not a
-  // spring" — `easeOutBack`'s slight overshoot (the `1.56` below briefly
-  // exceeds 1) is what keeps this feeling lively/fluid despite being a
-  // fixed-duration tween rather than real spring physics. One shared
-  // transition covers every animated value (`opacity`, `scale`, `x`) —
-  // an earlier pass suspected `opacity` wasn't fading in parallel with
-  // the slide (polling each pill's raw `style` attribute live showed it
-  // pinned at 0 for the whole ~300ms, then snapping straight to 1).
-  // Re-verified with `getComputedStyle` instead (the actual rendered
-  // value) and it was a false alarm: opacity rises smoothly in lockstep
-  // with the slide the whole time (0.03 → 0.29 → 0.51 → 0.81 → 0.96 → 1).
-  // Framer Motion hardware-accelerates this animation via the browser's
-  // native Web Animations API and only commits the FINAL value onto the
-  // inline `style` attribute once the animation ends — it never
-  // per-frame-syncs that attribute mid-flight — so polling raw `style`
-  // only ever showed the stale pre-animation value until the last frame.
-  // `getComputedStyle` (or just watching the screen) is the only
-  // trustworthy way to verify a Framer Motion animation's real timing.
-  const BOUNCE_TRANSITION = { duration: 0.3, ease: [0.34, 1.56, 0.64, 1] as [number, number, number, number] };
-  return (
-    <div className="mb-2 flex flex-wrap items-center gap-3">
-      {/* `initial` is left at its default (`true`) here — deliberately NOT
-          `initial={false}` the way the roster strip's own `AnimatePresence`
-          (below) uses it. That flag means "don't animate whatever's
-          already present the FIRST time I mount" — correct for the roster
-          strip, which is a long-lived list that persists across many
-          add/remove cycles and only wants NEW additions to animate, not
-          everyone replaying an entrance every time the strip itself first
-          appears. This banner is the opposite case: the entire component
-          (and this AnimatePresence) mounts FRESH every single time a
-          consult starts, and that fresh mount IS the moment we want the
-          two pills to visibly animate in — `initial={false}` here was
-          silently skipping that entrance animation entirely (caught live:
-          the pills just snapped straight to their resting position, no
-          slide, despite the `transition` below being configured). */}
-      <AnimatePresence>
-        <motion.span
-          key="customer"
-          initial={{ opacity: 0, scale: 0.5 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.5 }}
-          transition={BOUNCE_TRANSITION}
-          className="inline-flex"
-        >
-          <ParticipantChip label={customerLabel} isOnHold={customerOnHold} onToggleHold={onToggleHold} />
-        </motion.span>
-        {/* No connector line here — per explicit follow-up request ("don't
-            show the connecting line during merge consult until it's
-            merged"), that's reserved for the real roster strip below,
-            once this person is actually joined in. `x: 32` on the
-            consult-target pill's own `initial` (right below) is what gives
-            this gap its visual meaning instead — it starts noticeably
-            further away and slides in to close that exact distance.
-            Neither this pill nor the enclosing `AnimatePresence` use the
-            roster strip's own `layout`/`mode="popLayout"` — both exist
-            there to let OTHER pills reflow in parallel when one is
-            added/removed from a live list. This banner only ever shows
-            these same two fixed slots (nothing else is added/removed
-            around them for a position to need reconciling), so there's
-            no reflow to coordinate and no reason to pay for that
-            machinery here. (An earlier pass dropped `layout` suspecting
-            it was the cause of a separate opacity-not-fading bug — see
-            `BOUNCE_TRANSITION`'s own comment above for why that bug
-            turned out not to be real.) */}
-        <motion.span
-          key="consult-target"
-          initial={{ opacity: 0, scale: 0.5, x: 32 }}
-          animate={{ opacity: 1, scale: 1, x: 0 }}
-          exit={{ opacity: 0, scale: 0.5, x: 32 }}
-          transition={BOUNCE_TRANSITION}
-          className="inline-flex"
-        >
-          {/* `kind="colleague"` here (not just on the real post-merge
-              pill) is deliberate — the SAME blue tint the roster strip's
-              own colleague pills use, previewing what this person is
-              about to become the moment "Merge call" is pressed, rather
-              than looking like a plain, un-tinted pill that then suddenly
-              changes color post-merge. */}
-          <ParticipantChip
-            label={consultName}
-            kind="colleague"
-            isInternalAgent
-            isOnHold={consultOnHold}
-            onToggleHold={onToggleHold}
-            onTransfer={onTransfer}
-          />
-        </motion.span>
-      </AnimatePresence>
-      {/* Per explicit follow-up request ("set a max width for the merge
-          and cancel buttons, bring them much closer to the left-side of
-          that row"): sits right after the pills, same gap the roster
-          strip's own trailing "Un-merge calls" cluster uses, with any
-          leftover width just trailing empty on the right instead of
-          pushing this cluster flush to the far edge. Each button also
-          caps at a fixed `max-w-*` so neither grows past its own label's
-          natural width regardless of how much room this row ends up with. */}
-      <div className="ml-2 flex shrink-0 items-center gap-1.5">
-        <Button variant="outline" size="sm" className="max-w-[120px]" onClick={onCancel}>Cancel consult</Button>
-        <Button variant="default" size="sm" className="max-w-[100px]" onClick={onMerge}>Merge call</Button>
+  if (!trailingControlsPlain) {
+    return (
+      <div className="flex items-center gap-2">
+        <ParticipantRow
+          label={consultName}
+          kind="colleague"
+          isInternalAgent
+          isOnHold={consultOnHold}
+          onToggleHold={onToggleHold}
+          onTransfer={onTransfer}
+          onHangUp={onCancel}
+        />
+        <Button variant="default" size="sm" className="shrink-0" onClick={onMerge}>
+          Merge Call
+        </Button>
       </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <ParticipantRow
+        label={consultName}
+        kind="colleague"
+        isInternalAgent
+        isOnHold={consultOnHold}
+        onToggleHold={onToggleHold}
+        onTransfer={onTransfer}
+        onHangUp={onCancel}
+        // Per explicit follow-up request ("in this smaller width I still
+        // want to see the consult's name. push the controls under the
+        // name to allow the full name to be read"): the rail's own
+        // `max-w-[140px]` single-row name cap was truncating a real
+        // consult name down to a couple of characters — `stacked` instead
+        // gives the name its own full-width line, with Hold/Transfer/Drop
+        // moved to a second line below it. See `ParticipantRow`'s own
+        // `stacked` doc comment.
+        stacked
+      />
+      <Button variant="default" size="sm" className="w-full justify-center" onClick={onMerge}>
+        Merge Call
+      </Button>
     </div>
   );
 }
 
-/** One pill in the participant strip — ported from the reference app's
- *  identical `ParticipantChip` (`LiveVoiceCallBar.tsx`), same three-way
- *  reuse: "You" gets none of the three optional actions below (an agent
- *  can't hold, transfer, or hang up on themselves), the primary customer
- *  gets `onToggleHold` only (ending their leg is the bar's own main Hang
- *  Up button's job, transferring/dropping THEM isn't a real concept — the
- *  whole call just ends), and a colleague gets all three. Every action
- *  here is always visible when its handler is passed (no hover-to-reveal —
- *  matches the reference's own later-explicit-follow-up final state, not
- *  its earlier hover/click-to-pin version). `isInternalAgent` swaps the
+/** End Call's own popover content, once there's an actual Leave/End choice
+ *  to make (`VoiceCallControls`'s own `showLeaveChoice`) — per explicit
+ *  follow-up request ("look at ... Microsoft Teams and other similar apps
+ *  for how a user can end a group call, or choose to leave it"). Follows
+ *  Zoom's own shape for this exact choice (a single "End" trigger opens a
+ *  small two-option pick, no further confirmation layered on top of
+ *  picking one) rather than Teams' split-button-with-a-chevron — two plain
+ *  stacked `Button`s, no extra paragraph, same minimal "a couple of
+ *  buttons, nothing else" shape `ConsultBanner`'s own Cancel/Merge pair
+ *  (just above) already uses for an identical "quick, final choice"
+ *  moment. "Leave Call" first/`outline` (the lower-stakes, Zoom-style
+ *  default), "End Call for Everyone" below it/`destructive` (the
+ *  irreversible-for-others one) — deliberately not side-by-side, so this
+ *  stays legible at this bar's own narrow (left-nav/floating) widths too,
+ *  not just the wide bottom-bar host. */
+function EndCallChoiceMenu({
+  onLeave,
+  onEndForEveryone,
+}: {
+  onLeave: () => void;
+  onEndForEveryone: () => void;
+}) {
+  return (
+    <div className="flex w-56 flex-col gap-1.5 p-3">
+      <Button variant="outline" size="md" className="w-full justify-center" onClick={onLeave}>
+        Leave Call
+      </Button>
+      <Button variant="destructive" size="md" className="w-full justify-center" onClick={onEndForEveryone}>
+        End Call for Everyone
+      </Button>
+    </div>
+  );
+}
+
+/** One row in the conference roster disclosure (below) and in `ConsultCard`
+ *  above — replaces the old pill-shaped `ParticipantChip` (deleted) now
+ *  that pill shapes are gone from this whole flow. Same three-way reuse
+ *  that component had: "You" gets no actions (an agent can't hold,
+ *  transfer, or hang up on themselves), the primary customer gets
+ *  `onToggleHold` only, and a colleague gets all three. Every action here
+ *  is always visible when its handler is passed — omitting a handler
+ *  hides just that one action, and omitting all three renders a fully
+ *  READ-ONLY row (see this component's own call sites: the plain-
+ *  conference roster passes every handler; the mid-consult peek at an
+ *  already-existing conference passes none, per the confirmed "the entire
+ *  conference is either on hold or not" rule). `isInternalAgent` swaps the
  *  avatar from initials to a headset glyph — every colleague this bar can
- *  ever produce comes from `ConferencePicker`'s Favorites/Agents/Skills
- *  tabs (never a real customer merged in — this app's picker has no
- *  Customers tab the way the reference's does), so every colleague pill
- *  passes this `true`; only the primary customer pill (never "internal")
- *  shows real initials. Per a later explicit follow-up ("bring the pill
- *  idea and design to the merge consult flow"), `ConsultBanner` (above)
- *  ALSO renders two of these directly — the customer and the consult
- *  target — instead of its own separate, lower-fidelity pill markup; the
- *  consult target passes `isInternalAgent`/`kind="colleague"` the same way
- *  an already-merged colleague does, previewing what it's about to become. */
-function ParticipantChip({
+ *  ever produce comes from `ConferencePicker`, so every colleague row
+ *  passes this `true`; only the primary customer/"You" rows don't. */
+function ParticipantRow({
   label,
   isSelf,
   isInternalAgent,
@@ -866,6 +1058,7 @@ function ParticipantChip({
   onSelect,
   selected,
   kind,
+  stacked,
   className,
 }: {
   label: string;
@@ -881,205 +1074,197 @@ function ParticipantChip({
   onTransfer?: () => void;
   /** Presence alone gates the Hang Up (drop) icon — only ever passed for a
    *  colleague. Routed through the same inline "Drop {name}?" Check/X
-   *  confirm this pill already had before gaining Hold/Transfer. */
+   *  confirm `ParticipantChip` already had. */
   onHangUp?: () => void;
-  /** Makes the avatar+label area itself clickable — used only by a merged-
-   *  call roster pill (`VoiceCallControls`'s own `mergedInteractions`
-   *  rendering) to switch which bridged customer is focused
-   *  (`switchActiveInteraction` at the call site). Omitted everywhere else
-   *  — a plain colleague/"You" pill isn't a separate, selectable record. */
+  /** Makes the row itself clickable — used only by a merged-call row
+   *  (`VoiceCallControls`'s own `mergedInteractions` rendering) to switch
+   *  which bridged customer is focused. Omitted everywhere else. */
   onSelect?: () => void;
-  /** Highlights this pill as the currently-focused merged customer. Only
+  /** Highlights this row as the currently-focused merged customer. Only
    *  meaningful alongside `onSelect`. */
   selected?: boolean;
-  /** Which roster group this pill belongs to — tints the avatar bubble so
-   *  a "Conference" colleague and a "Merge Calls" bridged customer read as
-   *  two different kinds of thing at a glance, now that both can appear in
-   *  the SAME consolidated strip (see the roster strip's own doc comment
-   *  below for why they were merged into one). "colleague" reuses the
-   *  same blue the "Conference" `Tag` already uses in the control row
-   *  above; "merged" reuses the teal the new "Merged call" `Tag` uses —
-   *  each pill's color matches its own badge's color, not the other
-   *  group's. Omitted (plain neutral avatar) for "You"/the primary
-   *  customer, which aren't part of either group. */
+  /** Which roster group this row belongs to — tints the avatar bubble so a
+   *  "Conference" colleague and a "Merge Calls" bridged customer read as
+   *  two different kinds of thing at a glance. Omitted (plain neutral
+   *  avatar) for "You"/the primary customer, which aren't part of either
+   *  group. */
   kind?: "colleague" | "merged";
-  /** Per explicit follow-up request ("need to be able to see all parties
-   *  rather than a horizontal scroll. Likely stacking"): the floating/
-   *  narrow-width roster (`VoiceCallControls`'s own `rosterStacked` mode)
-   *  stretches each pill to the FULL width of its single-column stack
-   *  (`w-full`) instead of this pill's own default content-hugging
-   *  `shrink-0` — passed straight through to the root `cn()` merge, same
-   *  "caller can override, component doesn't need to know why" pattern
-   *  every other `className` prop in this file already follows. Omit to
-   *  keep the default horizontal-strip sizing (every other call site). */
+  /** Puts the name on its own full-width line and the action icons on a
+   *  second line below it (indented under the avatar), instead of sharing
+   *  one row — per explicit follow-up request ("in this smaller width I
+   *  still want to see the consult's name. push the controls under the
+   *  name to allow the full name to be read"): only `ConsultCard`'s own
+   *  narrow-rail rendering passes this, where the row's single-line
+   *  `max-w-[140px]` name cap (the default layout's own doc comment,
+   *  below) was truncating a real name down to a couple of characters —
+   *  the roster list (both hosts) keeps the default single-row layout,
+   *  where pinning icons to the row's right edge already reads cleanly
+   *  since those rows are rarely this width-starved. */
+  stacked?: boolean;
   className?: string;
 }) {
   const canExpand = !!onToggleHold || !!onTransfer || !!onHangUp;
   const [confirming, setConfirming] = useState(false);
-  // Per explicit follow-up request ("when a participant in a conference
-  // call is merged or dropped, add a simply animation to enhance the sense
-  // of being added to the chain, or leaving"): enter/exit animation for
-  // this whole pill — and the "remaining pills slide together" reflow when
-  // one leaves (a later, separate follow-up: "animate that more fluidly,
-  // rather than so quick") — now both live one level up, at this
-  // component's own call site in the roster strip, as a `framer-motion`
-  // `motion.span` wrapper (`layout` + `AnimatePresence`). That's a genuine
-  // "animate a layout change" (FLIP) problem plain CSS can't do on its
-  // own — there's no property to transition a flex item sliding from one
-  // computed position to another the way `transform`/`opacity` can be
-  // transitioned directly. This component itself no longer needs its own
-  // `isLeaving`/delayed-removal plumbing (a prior, simpler pass's own
-  // workaround for the exact same "let the exit animation play before
-  // actually unmounting" problem `AnimatePresence` now solves directly) —
-  // "Confirm drop" below just calls `onHangUp` immediately again.
-  return (
+  const avatar = (
     <span
       className={cn(
-        // Per explicit follow-up request ("go back to each individual
-        // participant in its own pill shape rather than a row ... set a
-        // border on the pill to help it stand out ... enlarge the
-        // controls"): `border` (was borderless — this pill used to rely
-        // entirely on the SHARED strip's own outer border, see that div's
-        // own doc comment) plus a taller `h-10` (was `h-8`) to comfortably
-        // fit the enlarged action buttons below without them looking
-        // cramped against the pill's own edge. Briefly went to `border-2`
-        // (to match the connector lines' own weight), then back down to
-        // plain `border` (1px) per a further explicit follow-up ("I've
-        // gone too far with the border size. Reduce the border size and
-        // connecting lines' pixel size") — `border-2` read as too heavy at
-        // this pill's scale. Color is a `color-mix()` of `--lyra-color-
-        // border-strong` at 60% (was 100% `border-lyra-border-strong`
-        // outright, then lightened per an earlier follow-up "lighten the
-        // color of the pill border and connecting lines") — `border-
-        // strong` itself has no lighter sibling token to fall back to
-        // (`border-subtle` is 10% opacity, far too faint; `border-active`
-        // is a solid blue, the wrong color family entirely), so this mixes
-        // partway toward transparent instead, the same technique
-        // `tag.tsx`'s own border already uses for its tinted variants.
-        // Pill border and connector line share this exact color (see that
-        // span's own identical class) so they keep reading as one
-        // consistent color even as their relative WEIGHT has changed a few
-        // times.
-        "flex h-10 shrink-0 items-center gap-2.5 rounded-full border border-[color-mix(in_srgb,var(--lyra-color-border-strong)_60%,transparent)] bg-lyra-bg-surface-base pl-1.5 pr-3",
-        selected && "bg-lyra-status-info-subtle",
-        className
+        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full lyra-body-xs-emphasis",
+        kind === "colleague"
+          ? "bg-lyra-status-info-subtle text-lyra-status-info-strong"
+          : kind === "merged"
+            ? "bg-lyra-accent-teal-soft text-lyra-accent-teal-strong"
+            // Solid primary blue, not the old `bg-lyra-bg-surface-
+            // container-subtle` neutral tint — per explicit follow-up
+            // request ("don't allow a white avatar, or any avatar color
+            // that is too close to the background colors across the
+            // project"): that neutral fill is the SAME token this row's
+            // own background can carry when on hold (and the card/
+            // popover around it always carries), so it was reading as no
+            // avatar at all rather than a muted one. Same solid pairing
+            // the main identity avatar already uses for its own no-
+            // special-color ("just a plain person") case.
+            : "bg-lyra-bg-primary text-lyra-fg-on-primary",
+        onSelect && "cursor-pointer"
       )}
+      aria-hidden="true"
+      {...(onSelect ? { onClick: onSelect } : {})}
     >
-      <span
-        className={cn(
-          "flex h-7 w-7 shrink-0 items-center justify-center rounded-full lyra-body-xs-emphasis",
-          kind === "colleague"
-            ? "bg-lyra-status-info-subtle text-lyra-status-info-strong"
-            : kind === "merged"
-              ? "bg-lyra-accent-teal-soft text-lyra-accent-teal-strong"
-              : "bg-lyra-bg-surface-container-subtle text-lyra-fg-secondary",
-          onSelect && "cursor-pointer"
-        )}
-        aria-hidden="true"
-        {...(onSelect ? { onClick: onSelect } : {})}
+      {isSelf ? "You" : isInternalAgent ? <Headset className="h-3.5 w-3.5" strokeWidth={1.5} /> : initialsFor(label)}
+    </span>
+  );
+  // Per explicit follow-up request ("name and controls for each participant
+  // need to be much closer together"): no more `flex-1` in the default
+  // (non-`stacked`) layout — that grew the name to fill the ENTIRE row,
+  // pushing the trailing Hold/Transfer/Drop icons all the way to the row's
+  // far edge regardless of how short the name actually was. A fixed
+  // `max-w-[140px]` (still `truncate` for a genuinely long name) lets the
+  // name take only the room it needs there. `stacked` mode instead gives
+  // the name its own full-width line (`min-w-0 flex-1`, no fixed cap) —
+  // see this prop's own doc comment for why.
+  const nameClassName = stacked
+    ? "min-w-0 flex-1 truncate text-left lyra-body-sm text-lyra-fg-default"
+    : "max-w-[140px] truncate text-left lyra-body-sm text-lyra-fg-default";
+  // `Tooltip` — per explicit follow-up request ("want to see a hover label
+  // over the names on these rows"): the name is truncated/width-capped
+  // (`nameClassName`, above) so a long name can read as just a couple of
+  // characters + "…" — a real, styled `Tooltip` surfaces the full text on
+  // hover without needing a wider row. Replaces an earlier native `title`
+  // attempt — its browser-default show delay was the "too slow" hover label
+  // the same follow-up flagged, on top of being unstyled; this bar's every
+  // other hover label (Mute/Hold/Mask/Record, above) already goes through
+  // this same `Tooltip`, not a native `title`.
+  const name = onSelect ? (
+    <Tooltip content={label} placement="top">
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-pressed={selected}
+        className={cn(nameClassName, "hover:underline")}
       >
-        {isSelf ? "You" : isInternalAgent ? <Headset className="h-3.5 w-3.5" strokeWidth={1.5} /> : initialsFor(label)}
+        {label}
+      </button>
+    </Tooltip>
+  ) : (
+    <Tooltip content={label} placement="top">
+      <span className={nameClassName}>{label}</span>
+    </Tooltip>
+  );
+  // `ml-auto` (default layout only) — per explicit follow-up request
+  // ("align and pin these icons to the right side of this width. I find
+  // them too close currently, and not organized looking"): the name above
+  // only ever takes the room its own text needs, so without this the icon
+  // cluster used to sit immediately after whatever that happened to be —
+  // reading as a different, inconsistent position per row depending on
+  // each name's own length. `ml-auto` claims all remaining space on the
+  // LEFT of this cluster instead, pinning it flush to the row's own right
+  // edge every time. `stacked` mode drops it — that layout's own second
+  // line has nothing else sharing it to pin away from.
+  const actions = canExpand && (
+    confirming ? (
+      <span className={cn("flex shrink-0 items-center gap-1.5", !stacked && "ml-auto")}>
+        <span className="lyra-body-xs text-lyra-fg-secondary whitespace-nowrap">Drop?</span>
+        <button
+          type="button"
+          aria-label={`Confirm drop ${label}`}
+          onClick={() => {
+            setConfirming(false);
+            onHangUp?.();
+          }}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-status-critical-strong hover:bg-lyra-state-hover"
+        >
+          <Check className="h-4 w-4" strokeWidth={2} />
+        </button>
+        <button
+          type="button"
+          aria-label="Cancel"
+          onClick={() => setConfirming(false)}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
+        >
+          <X className="h-4 w-4" strokeWidth={2} />
+        </button>
       </span>
-      {!isSelf &&
-        (onSelect ? (
+    ) : (
+      <span className={cn("flex shrink-0 items-center gap-1.5", !stacked && "ml-auto")}>
+        {onToggleHold && (
           <button
             type="button"
-            onClick={onSelect}
-            aria-pressed={selected}
-            className="lyra-body-sm text-lyra-fg-default max-w-[130px] truncate text-left hover:underline"
+            title={isOnHold ? `Resume ${label}` : `Hold ${label}`}
+            aria-label={isOnHold ? `Resume ${label}` : `Hold ${label}`}
+            onClick={onToggleHold}
+            className={cn(
+              "flex h-8 w-8 items-center justify-center rounded-full hover:bg-lyra-state-hover",
+              isOnHold ? "text-lyra-status-critical-strong" : "text-lyra-fg-secondary"
+            )}
           >
-            {label}
+            {isOnHold ? <Play className="h-4 w-4" strokeWidth={2} /> : <Pause className="h-4 w-4" strokeWidth={2} />}
           </button>
-        ) : (
-          <span className="lyra-body-sm text-lyra-fg-default max-w-[130px] truncate">{label}</span>
-        ))}
-      {canExpand &&
-        (confirming ? (
-          <span className="flex shrink-0 items-center gap-1.5">
-            <span className="lyra-body-xs text-lyra-fg-secondary whitespace-nowrap">Drop?</span>
-            {/* Per explicit follow-up request ("enlarge the controls for
-                each individual participant"): every action button in this
-                pill goes from 24px (`h-6 w-6`) to 32px (`h-8 w-8`), and
-                every icon inside one from 14px to 16px (`h-3.5 w-3.5` to
-                `h-4 w-4`) — matching `TransferIcon`'s own fixed 16px
-                composite (below) exactly, so Hold/Transfer/Drop/Confirm/
-                Cancel all read as one consistent icon scale rather than
-                Transfer looking slightly smaller than its neighbors. */}
-            <button
-              type="button"
-              aria-label={`Confirm drop ${label}`}
-              onClick={() => {
-                // See this component's own top doc comment — the exit
-                // animation (and delaying the actual unmount until it
-                // finishes) is now `AnimatePresence`'s job, one level up.
-                setConfirming(false);
-                onHangUp?.();
-              }}
-              className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-status-critical-strong hover:bg-lyra-state-hover"
-            >
-              <Check className="h-4 w-4" strokeWidth={2} />
-            </button>
-            <button
-              type="button"
-              aria-label="Cancel"
-              onClick={() => setConfirming(false)}
-              className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
-            >
-              <X className="h-4 w-4" strokeWidth={2} />
-            </button>
-          </span>
-        ) : (
-          <span className="flex shrink-0 items-center gap-1.5">
-            {onToggleHold && (
-              <button
-                type="button"
-                title={isOnHold ? `Resume ${label}` : `Hold ${label}`}
-                aria-label={isOnHold ? `Resume ${label}` : `Hold ${label}`}
-                onClick={onToggleHold}
-                className={cn(
-                  "flex h-8 w-8 items-center justify-center rounded-full hover:bg-lyra-state-hover",
-                  isOnHold ? "text-lyra-status-critical-strong" : "text-lyra-fg-secondary"
-                )}
-              >
-                {isOnHold ? <Play className="h-4 w-4" strokeWidth={2} /> : <Pause className="h-4 w-4" strokeWidth={2} />}
-              </button>
-            )}
-            {onTransfer && (
-              <button
-                type="button"
-                title={`Transfer call to ${label}`}
-                aria-label={`Transfer call to ${label}`}
-                onClick={onTransfer}
-                className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
-              >
-                {/* `TransferIcon` — per explicit follow-up request ("change
-                    this icon to the transfer/consult icon used
-                    elsewhere"): same composite this app's record-header
-                    "Consult / Transfer" button and `ConferencePicker`'s own
-                    row-level Transfer action already use, instead of a
-                    bare `ArrowRightLeft` glyph unique to this one spot.
-                    Fixed-size (no `className` override — see that
-                    component's own definition) at its own native 16px,
-                    which now matches every sibling icon's enlarged size
-                    exactly (see this button cluster's own "enlarge the
-                    controls" comment above) inside this now-32px button. */}
-                <TransferIcon />
-              </button>
-            )}
-            {onHangUp && (
-              <button
-                type="button"
-                title={`Drop ${label}`}
-                aria-label={`Drop ${label}`}
-                onClick={() => setConfirming(true)}
-                className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-status-critical-strong hover:bg-lyra-state-hover"
-              >
-                <PhoneOff className="h-4 w-4" strokeWidth={2} />
-              </button>
-            )}
-          </span>
-        ))}
-    </span>
+        )}
+        {onTransfer && (
+          <button
+            type="button"
+            title={`Transfer call to ${label}`}
+            aria-label={`Transfer call to ${label}`}
+            onClick={onTransfer}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
+          >
+            <TransferIcon />
+          </button>
+        )}
+        {onHangUp && (
+          <button
+            type="button"
+            title={`Drop ${label}`}
+            aria-label={`Drop ${label}`}
+            onClick={() => setConfirming(true)}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-status-critical-strong hover:bg-lyra-state-hover"
+          >
+            <PhoneOff className="h-4 w-4" strokeWidth={2} />
+          </button>
+        )}
+      </span>
+    )
+  );
+  const rowTint = cn(selected && "bg-lyra-status-info-subtle", isOnHold && "bg-lyra-status-critical-subtle");
+  if (stacked) {
+    return (
+      <div className={cn("flex flex-col gap-1 px-2 py-1.5", rowTint, className)}>
+        <div className="flex min-w-0 items-center gap-2.5">
+          {avatar}
+          {name}
+        </div>
+        {/* `pl-9` indents under the name — avatar's own `w-7` (28px) +
+            this row's `gap-2.5` (10px) — so the icons read as belonging to
+            the name above them, not just a bare second line. */}
+        {actions && <div className="flex items-center gap-1.5 pl-9">{actions}</div>}
+      </div>
+    );
+  }
+  return (
+    <div className={cn("flex items-center gap-2.5 px-2 py-1.5", rowTint, className)}>
+      {avatar}
+      {name}
+      {actions}
+    </div>
   );
 }
 
@@ -1198,7 +1383,7 @@ export interface VoiceCallControlsProps {
    *  for them — see `colleagues`' own state doc comment below for the full
    *  bug writeup. Omit to keep the original always-starts-empty behavior
    *  (a caller with no conference concept at all). */
-  initialColleagues?: { id: string; name: string }[];
+  initialColleagues?: { id: string; name: string; isInternalAgent?: boolean }[];
   /** Same identity this bar's own `key` prop is built from at the call
    *  site (`${interactionId}:${threadId}`) — passed through as a REGULAR
    *  prop too (not just baked into `key`, which this component can't read
@@ -1328,6 +1513,12 @@ export interface VoiceCallControlsProps {
    *  already produces, and the same reason there's no "un-join" for it
    *  either. */
   onJoinCall?: (interactionId: string) => void;
+  /** Populates the Consult/Transfer popover's own "Select Outbound Skill"
+   *  step (`ConferencePicker`'s own `ConsultSetupStep` doc comment) — each
+   *  page passes its own existing `OUTBOUND_CONFIG.skillOptions`, the SAME
+   *  constant it already uses for `AddChannelAdHocButton`/Quick Dial, not a
+   *  fresh list invented here. */
+  skillOptions: { value: string; label: string }[];
   className?: string;
   /** Strips the outline border + background off Mute/Add video/End Call
    *  (the trailing "dark" cluster) — per explicit request ("remove the
@@ -1367,22 +1558,6 @@ export interface VoiceCallControlsProps {
    *  call site omits this — its centered-decorative/anchored-right-dark
    *  two-cluster layout (this file's own top doc comment) is unaffected. */
   mergeTrailingIntoCluster?: boolean;
-  /** Switches the roster/participant-chip strip (You/customer/colleagues/
-   *  bridged customers) from its default horizontally-scrollable single row
-   *  to a vertical stack, one pill per row — per explicit follow-up request
-   *  ("need to be able to see all parties rather than a horizontal scroll.
-   *  Likely stacking"): the left nav's own floating host is narrow enough
-   *  that a horizontal scroll strip there hides everyone but the pill(s)
-   *  currently in view, which is wrong for a SMALL, FIXED roster an agent
-   *  needs to see all of at a glance — a materially different situation
-   *  from `rosterScrollRef`'s own doc comment's reasoning for why
-   *  horizontal scroll is fine for the WIDE bottom bar (an open-ended list
-   *  of people, plenty of width to show several before scrolling is ever
-   *  needed). The connector between pills rotates from a horizontal line
-   *  to a vertical one to match; each pill stretches to the stack's full
-   *  width (`ParticipantChip`'s own `className` prop) instead of staying
-   *  content-sized. The bottom bar's own call site omits this. */
-  rosterStacked?: boolean;
 }
 
 // Module-level (NOT component state) — survives this bar's own remounts on
@@ -1426,10 +1601,10 @@ export function VoiceCallControls({
   onEndAllCalls,
   joinableCall,
   onJoinCall,
+  skillOptions,
   className,
   trailingControlsPlain,
   mergeTrailingIntoCluster,
-  rosterStacked,
 }: VoiceCallControlsProps) {
   // Decorative-only fallback for a caller that hasn't wired `onHoldChange`
   // through yet — see that prop's own doc comment (same `localVideoAdded`/
@@ -1463,6 +1638,35 @@ export function VoiceCallControls({
   const [localConferenceOpen, setLocalConferenceOpen] = useState(false);
   const conferenceOpen = onConferenceOpenChange ? !!conferenceOpenControlled : localConferenceOpen;
   const setConferenceOpen = onConferenceOpenChange ?? setLocalConferenceOpen;
+  // Grace period for the Consult popover's own `onInteractOutside` guard,
+  // just below — per a confirmed bug report ("the popup briefly appears
+  // then disappears") that survived even the existing `consultAnchorRef?.
+  // current?.contains(e.target)` guard (that guard's own doc comment,
+  // below, already covers ONE version of this race — the kebab's trigger
+  // BUTTON regaining focus). The version that survived it: opening from a
+  // kebab row that ALSO has to switch which interaction is active (this
+  // bar remounts fresh for the newly-active call) fires a stray
+  // `focusOutside` whose target is the kebab `DropdownMenu`'s own PORTALED
+  // content div, mid-close — a real Radix container-focus fallback, not a
+  // genuine outside click, but it's rendered in a portal outside
+  // `consultAnchorRef.current` (the row), so `.contains()` is false for it
+  // no matter what. Rather than trying to enumerate every possible
+  // closing-dropdown DOM shape here, this ignores ANY interact-outside for
+  // a brief window right after `consultAnchorRef.current` was just set
+  // (i.e. opened from somewhere other than this bar's own Consult button) —
+  // long enough for that closing kebab's own focus churn to finish, short
+  // enough that a genuine outside click a moment later still dismisses
+  // normally.
+  const consultAnchorJustSetRef = useRef(false);
+  useEffect(() => {
+    if (!conferenceOpen || !consultAnchorRef?.current) return;
+    consultAnchorJustSetRef.current = true;
+    const timer = window.setTimeout(() => {
+      consultAnchorJustSetRef.current = false;
+    }, 150);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conferenceOpen]);
   // The real consult-then-merge conference flow — ported from the
   // reference app's identical `voiceCallColleagues`/`voiceCallConsult`
   // (AgentNextGenPage.tsx), just kept local to this component instead of
@@ -1495,7 +1699,7 @@ export function VoiceCallControls({
   // established; `colleagues` was the one field that had only ever been
   // wired as write-only.
   const [colleagues, setColleagues] = useState<CallColleague[]>(
-    () => initialColleagues?.map((c) => ({ id: c.id, name: c.name, isOnHold: false })) ?? []
+    () => initialColleagues?.map((c) => ({ id: c.id, name: c.name, isOnHold: false, isInternalAgent: c.isInternalAgent })) ?? []
   );
   // Notifies the caller every time the roster's actual MEMBERSHIP changes
   // (a merge or a drop) — see `onColleaguesChange`'s own doc comment.
@@ -1615,6 +1819,12 @@ export function VoiceCallControls({
     return () => window.clearTimeout(bubbleTimeoutRef.current);
   }, [colleagues.length]);
   const [consult, setConsult] = useState<VoiceCallConsult | undefined>(undefined);
+  // Collapsed by default — the conference/merged-call roster disclosure
+  // (below) replaces the old always-visible pill strip, so a plain call
+  // isn't forced to carry an empty-looking affordance either; purely local
+  // UI state, same "no need to survive a remount" reasoning the old
+  // `ConsultBanner`'s own `conferenceExpanded` used to follow.
+  const [rosterExpanded, setRosterExpanded] = useState(false);
 
   // Per explicit request ("when end call is clicked transition the end
   // call button to a hanging up state (disabled) then disable the other
@@ -1743,31 +1953,6 @@ export function VoiceCallControls({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  // The roster strip used to be a plain `flex-wrap` row with no overflow
-  // handling — fine with real room, but at a genuinely narrow container (a
-  // docked panel, or this bar on a phone-width viewport) the connector line
-  // interleaved between pills (below) wrapped mid-pattern, leaving a
-  // dangling line connected to nothing on the line it wrapped from (caught
-  // from a screenshot). Fixed by reusing this design system's own existing
-  // "scrollable row with hover-chevron affordance" pattern
-  // (`useScrollChevrons`/`ScrollChevronButton`, lyra-ui's `scroll-chevron
-  // .tsx` — the same mechanism `TabList`'s own horizontal overflow already
-  // uses, newly re-exported from lyra-ui's `index.ts` for this) instead of
-  // wrapping: the roster becomes a single, never-wrapping scrollable line,
-  // with chevrons fading in exactly when there's more content than room.
-  // Scrolling is an acceptable, standard interaction for a roster
-  // specifically because it's an open-ended LIST of people — there's no
-  // fixed, enumerable set of "the roster controls" an agent needs to be
-  // able to see all of at a glance the way there is for the decorative
-  // Hold-through-Volume cluster below (which went a different way — see
-  // that cluster's own doc comment, where this same scroll approach was
-  // tried first and then deliberately replaced).
-  const rosterScrollRef = useRef<HTMLDivElement>(null);
-  const rosterChevrons = useScrollChevrons(
-    rosterScrollRef,
-    [colleagues.length, mergedInteractions?.length, consult],
-    "horizontal"
-  );
   useEffect(() => {
     if (!isExiting) return;
     const el = barRef.current;
@@ -1820,7 +2005,7 @@ export function VoiceCallControls({
   // site) purely so it reads as its own named action, same convention every
   // other consult/colleague handler on this bar already follows.
   const handleTransferConsult = () => {
-    handleHangUp();
+    handleEndForEveryone();
   };
   // Drop — ported from the reference app's `dropVoiceCallColleague`. Only
   // ever fired from `ParticipantChip`'s own Check/X confirm step, never
@@ -1845,20 +2030,34 @@ export function VoiceCallControls({
   // at the `ParticipantChip` call site) so the control stays wired/visibly
   // present rather than silently dropped.
   const handleTransferColleague = () => {};
-  // Per explicit follow-up ("look at end all icon for a merged call and the
-  // end call button from the original voice controls. They seem to be
-  // redundant in this scenario"): this bar's own roster strip used to carry
-  // a SECOND "end" control (a small icon + inline confirm, "End all calls")
-  // whenever a Merge Calls bridge was active — redundant with this button,
-  // which was always visible too, just with narrower (single-call) scope.
-  // That second control is gone now (see the roster strip's own comment);
-  // this ONE button picks the right scope itself instead — `onEndAllCalls`
-  // (ends every bridged member at once) when `mergedInteractions` is
-  // non-empty, the original single-call `onHangUp` otherwise. Falls back to
-  // `onHangUp` if a caller wires `mergedInteractions` without also wiring
-  // `onEndAllCalls` — same "missing handler, don't crash" convention every
-  // other optional callback here already follows.
-  const handleHangUp = () => {
+  // Per explicit follow-up request ("look at ... Microsoft Teams and other
+  // similar apps for how a user can end a group call, or choose to leave
+  // it"): Teams gives its organizer a plain "Leave" by default with "End
+  // meeting" tucked behind a chevron; Zoom's single "End" button opens a
+  // two-option choice ("End Meeting for All" vs "Leave Meeting"), no extra
+  // confirmation on top of picking one. This bar follows Zoom's shape
+  // (`showLeaveChoice`/`EndCallChoiceMenu`, both below) — a plain 1:1 call
+  // keeps today's single-click hang-up untouched; a Conference or Merge
+  // Calls party gets the two-option popover instead.
+  //
+  // `showLeaveChoice` — true once there's actually someone who'd keep the
+  // call going without this agent (a merged colleague, OR a bridged Merge
+  // Calls partner) — never true for a plain 1:1 call, matching both
+  // reference apps' own identical gating.
+  const showLeaveChoice = colleagues.length > 0 || !!mergedInteractions?.length;
+  const [endCallMenuOpen, setEndCallMenuOpen] = useState(false);
+  // Which option was actually picked from `EndCallChoiceMenu` — purely so
+  // the animated-exit label below (`endingLabel`) can say "Leaving..."
+  // instead of "Hanging Up..."/"Ending All Calls..." when that's what's
+  // actually happening. Irrelevant (stays at its default) for the plain
+  // 1:1 case, where there's no menu to have picked anything from.
+  const [endAction, setEndAction] = useState<"end" | "leave">("end");
+  // Shared animated-exit sequencing — was `handleHangUp`'s own inline body;
+  // factored out so both `handleEndForEveryone` and the new `handleLeaveCall`
+  // (below) get the identical spinner/hold/fade timeline and the identical
+  // double-fire guard/popover-closing behavior, differing only in which
+  // real action actually ends the call once the animation finishes.
+  const beginHangUpSequence = (finalAction: () => void) => {
     // Guards against a double-fire (e.g. a stray extra click before the
     // button's own `disabled` re-renders) from scheduling the end callback
     // twice.
@@ -1875,24 +2074,193 @@ export function VoiceCallControls({
     hangUpTimeoutsRef.current.push(
       window.setTimeout(() => {
         setIsExiting(true);
-        hangUpTimeoutsRef.current.push(
-          window.setTimeout(() => {
-            if (mergedInteractions?.length && onEndAllCalls) {
-              onEndAllCalls();
-            } else {
-              onHangUp();
-            }
-          }, HANG_UP_EXIT_MS)
-        );
+        hangUpTimeoutsRef.current.push(window.setTimeout(finalAction, HANG_UP_EXIT_MS));
       }, HANG_UP_HOLD_MS)
     );
   };
-  // Matches `handleHangUp`'s own scope decision just above — the button's
-  // own label needs to say what it's ACTUALLY about to do (end one call vs.
-  // every bridged member at once), not just always read "End Call" while
-  // silently taking down more than that.
-  const endCallLabel = mergedInteractions?.length ? "End All Calls" : "End Call";
-  const endingLabel = mergedInteractions?.length ? "Ending All Calls..." : "Hanging Up...";
+  // Per explicit follow-up ("look at end all icon for a merged call and the
+  // end call button from the original voice controls. They seem to be
+  // redundant in this scenario"): this bar's own roster strip used to carry
+  // a SECOND "end" control (a small icon + inline confirm, "End all calls")
+  // whenever a Merge Calls bridge was active — redundant with this button,
+  // which was always visible too, just with narrower (single-call) scope.
+  // That second control is gone now (see the roster strip's own comment);
+  // this ONE button (today's default choice, and `EndCallChoiceMenu`'s own
+  // "End Call for Everyone" option once a choice exists) picks the right
+  // scope itself instead — `onEndAllCalls` (ends every bridged member at
+  // once) when `mergedInteractions` is non-empty, the original single-call
+  // `onHangUp` otherwise. Falls back to `onHangUp` if a caller wires
+  // `mergedInteractions` without also wiring `onEndAllCalls` — same
+  // "missing handler, don't crash" convention every other optional callback
+  // here already follows.
+  const handleEndForEveryone = () => {
+    setEndAction("end");
+    beginHangUpSequence(() => {
+      if (mergedInteractions?.length && onEndAllCalls) {
+        onEndAllCalls();
+      } else {
+        onHangUp();
+      }
+    });
+  };
+  // New — per the same explicit follow-up: lets the agent step away while
+  // the call keeps going for whoever's left, instead of always taking
+  // everyone down with it.
+  //
+  // Merge Calls (`mergedInteractions.length > 0`): a REAL, different
+  // outcome from `handleEndForEveryone` above — un-merge first
+  // (`onUnmergeCalls`, already wired in from the page, already splits the
+  // bridge back into two fully independent interactions) and only THEN end
+  // this agent's own leg (`onHangUp`). The other bridged interaction keeps
+  // running, genuinely independent — it already has its own separate
+  // `VoiceCallControls` instance once that interaction is viewed, so there's
+  // nothing else this needs to do for it to keep going.
+  //
+  // Conference (`colleagues.length > 0`, no merge): there is NO real
+  // telephony backend here modeling "the call continues without the
+  // agent" — `colleagues` is a roster riding on this agent's own `Thread`,
+  // not an independently-running call of its own, so there's nothing left
+  // for "leave" to do differently from "end for everyone" without one.
+  // This branch is just `onHangUp()` — the SAME single call
+  // `handleTransferConsult` above already reuses for its own identical
+  // "this agent's own leg is done" case — which means Leave and End Call
+  // for Everyone are functionally IDENTICAL for a pure-Conference call
+  // today. Accepted, not hidden: the menu still shows both options for
+  // mental-model consistency with the Merge Calls case above, where they
+  // genuinely do differ — revisit this the moment a real backend can
+  // actually represent a conference continuing without this agent.
+  const handleLeaveCall = () => {
+    setEndAction("leave");
+    beginHangUpSequence(() => {
+      if (mergedInteractions?.length) {
+        onUnmergeCalls?.();
+      }
+      onHangUp();
+    });
+  };
+  // Resting label is always just "End Call" now — the old merge-aware
+  // "End All Calls" nuance moved into `EndCallChoiceMenu`'s own "End Call
+  // for Everyone" option label instead, since clicking this button no
+  // longer hangs up directly once `showLeaveChoice` is true (it opens that
+  // menu instead) — there's no longer a resting state where this label
+  // needs to pre-announce which scope a direct click would use.
+  const endCallLabel = "End Call";
+  const endingLabel =
+    endAction === "leave" ? "Leaving..." : mergedInteractions?.length ? "Ending All Calls..." : "Hanging Up...";
+  // The End Call button's own click handler — opens `EndCallChoiceMenu`
+  // instead of hanging up directly once there's an actual choice to make
+  // (`showLeaveChoice`); otherwise behaves exactly as today, a single click
+  // straight into `handleEndForEveryone`'s animated exit.
+  const handleEndCallButtonClick = () => {
+    if (showLeaveChoice) {
+      setEndCallMenuOpen((open) => !open);
+    } else {
+      handleEndForEveryone();
+    }
+  };
+
+  // Conference/Merged-call tags — pulled out into one shared fragment (same
+  // "render in two possible positions without duplicating the JSX" reason
+  // `trailingButtons`, just below, already exists for) so the identity
+  // block's own two call sites (inline with the name on the wide/bottom-bar
+  // host, or on their own line under the timer on the narrow rail — see
+  // each call site's own doc comment) can't drift out of sync with each
+  // other. Per explicit follow-up request ("move the conference pill in
+  // the left rail view under the timer and above the controls"): sharing
+  // the NAME's line worked fine on the wide bottom bar (plenty of room),
+  // but crowded/truncated the customer name unnecessarily in the narrow
+  // rail, where this now gets its own line instead.
+  const conferenceTags = (
+    <>
+      {/* Conference indicator — per explicit follow-up request ("show in
+          the voice control bar that there is a conference happening. A
+          label and/or icon calling attention that this call is in a
+          conference"): once any colleague is actually merged in. Same
+          `Users` glyph the left-nav assignment card now also shows for
+          this exact state (`InteractionNavItemProps.isConferenceCall`,
+          interaction-nav-item.tsx) — one consistent "this is a conference"
+          signal across both surfaces.
+
+          Per a design critique (this one "Conference" tag used to ALSO
+          cover a Merge-Calls bridge — two structurally different
+          relationships rendering as the exact same chip, with no way to
+          tell which kind of multi-party state was actually active): this
+          tag is now SCOPED to `colleagues` only — an internal agent/skill
+          merged into this one customer's own thread — and a second,
+          separate "Merged call" tag (below) covers the bridged-interaction
+          case instead. Both can render at once, reflecting that they
+          really are two independent things that can both be true on the
+          same call at the same time — collapsing that reality down to a
+          single chip is exactly what created the ambiguity. */}
+      {colleagues.length > 0 && (
+        // Per explicit follow-up request ("make the conference pill stand
+        // out more, move it away from the name a little bit so it is more
+        // noticeable, change color, try a little animation bubble
+        // effect"): `ml-2` on top of this row's own `gap-1.5` gives the
+        // pill noticeably more breathing room from the customer name
+        // specifically (the "Merged call" tag right after it, if also
+        // showing, stays at the plain `gap-1.5` distance — the ask was
+        // separation from the NAME, not from this tag's own neighbor) —
+        // only meaningful on the wide host's inline-with-name call site;
+        // harmless (just an unused extra left margin) on the rail's own
+        // separate-line call site. `purple` (was `info`/blue, which read
+        // as just another status chip) is one of Tag's three fixed
+        // categorical-accent variants, same family "Merged call" already
+        // uses (`teal`) but a visually distinct hue, so the two multi-
+        // party tags don't read as the same color family. Per a round of
+        // later explicit follow-ups (full history on `conferenceBubbling`'s
+        // own doc comment above): a single grow-then-settle scale read as
+        // a little flat ("a bit more lively ... like two bubbles so it
+        // seems more organic"), so this is now a `framer-motion` keyframe-
+        // array animation — two visible rebounds (100% → 130% → 90% →
+        // 110% → 100%) instead of one smooth ease — on a plain wrapping
+        // `motion.span` around the otherwise-unchanged `Tag`, delayed half
+        // a second after the roster actually changes. `animate`'s own
+        // value only ever switches between a static `1` and the keyframe
+        // array (never torn down mid-flight some other way), so framer-
+        // motion always plays the full sequence once per real
+        // `conferenceBubbling` flip rather than needing this component to
+        // hand-manage individual animation steps.
+        <motion.span
+          className="ml-2 inline-flex shrink-0"
+          animate={{ scale: conferenceBubbling ? [1, 1.3, 0.9, 1.1, 1] : 1 }}
+          transition={{
+            duration: BUBBLE_DURATION_MS / 1000,
+            times: [0, 0.25, 0.5, 0.75, 1],
+            ease: "easeInOut",
+          }}
+        >
+          <Tag
+            label="Conference"
+            variant="purple"
+            shape="pill"
+            icon={<Users className="h-3 w-3" strokeWidth={1.5} />}
+          />
+        </motion.span>
+      )}
+      {/* Merged-call indicator — a Merge-Calls bridge (two fully separate
+          Interactions spliced together), distinct from the internal
+          "Conference" case above. Reuses `Merge`, the SAME icon the
+          "Merge Calls" kebab menu item already uses (channel-row.tsx) —
+          one consistent glyph for this concept across the entry point and
+          the resulting state, same reasoning the Conference tag's own
+          `Users` glyph already follows for ITS concept. `teal` (one of
+          Tag's three fixed categorical-accent variants — see
+          `TagVariant`'s own doc comment, tag.tsx) rather than `info`
+          specifically so it reads as a visually distinct category from
+          the blue "Conference" tag, not a second copy of the same status
+          color. */}
+      {!!mergedInteractions?.length && (
+        <Tag
+          label="Merged call"
+          variant="teal"
+          shape="pill"
+          className="shrink-0"
+          icon={<Merge className="h-3 w-3" strokeWidth={1.5} />}
+        />
+      )}
+    </>
+  );
 
   // Mute/Add video/End Call — pulled out into one shared fragment (not
   // inlined at a single call site) so `mergeTrailingIntoCluster`'s own doc
@@ -1982,16 +2350,52 @@ export function VoiceCallControls({
       ))}
       {/* End Call — see this file's own git history for the full "why" on
           every detail below (size/height/filled-red/disabled-while-ending
-          reasoning) — unchanged, just lifted into this shared fragment. */}
-      {controlsIconOnly ? (
-        <Tooltip content={isEnding ? endingLabel : endCallLabel} placement="top">
-          {trailingControlsPlain ? (
+          reasoning) — unchanged, just lifted into this shared fragment.
+          Wrapped in a `Popover` (new) whose `open` can only ever be true
+          once `showLeaveChoice` is — a plain 1:1 call's Popover never
+          opens, so every detail below renders/behaves exactly as it always
+          has for that case; only a Conference/Merge Calls party's click
+          now opens `EndCallChoiceMenu` instead of hanging up directly. */}
+      <Popover
+        open={showLeaveChoice && endCallMenuOpen}
+        onOpenChange={setEndCallMenuOpen}
+        placement="top"
+        bodyPadding={false}
+        content={
+          <EndCallChoiceMenu
+            onLeave={() => {
+              setEndCallMenuOpen(false);
+              handleLeaveCall();
+            }}
+            onEndForEveryone={() => {
+              setEndCallMenuOpen(false);
+              handleEndForEveryone();
+            }}
+          />
+        }
+      >
+        {controlsIconOnly ? (
+          // Native `title` (not `Tooltip`) on each button below — same
+          // reason the Keypad button right above uses one instead of
+          // wrapping in `Tooltip`: `Tooltip`'s own `asChild`/`Slot` cloning
+          // and this `Popover`'s do the same thing to the same immediate
+          // child, so nesting one inside the other silently breaks ref
+          // forwarding to the real `<button>` — which is exactly why this
+          // control's own Leave/End choice menu used to render anchored to
+          // the wrong place entirely (confirmed live: it opened pinned near
+          // the top of the page instead of next to this button) once this
+          // bar was narrow enough to hit this icon-only branch. Fixed by
+          // dropping the wrapping `Tooltip` outright, same fix already
+          // applied to Keypad.
+          trailingControlsPlain && !showLeaveChoice ? (
             // See `trailingControlsPlain`'s own doc comment — the same
             // plain `CompactCallControlButton` every other control here
             // uses (`critical` = red text on hover/press, no solid
             // fill), instead of the filled destructive `Button` the
             // bottom bar keeps. `isEnding`'s own disabled/spinner
-            // behavior is unchanged.
+            // behavior is unchanged. Only while `!showLeaveChoice`
+            // (a plain 1:1 call) — see the filled branch's own doc
+            // comment for why a Leave/End choice changes this.
             <CompactCallControlButton
               icon={
                 isEnding ? (
@@ -2001,17 +2405,29 @@ export function VoiceCallControls({
                 )
               }
               critical
+              title={isEnding ? endingLabel : endCallLabel}
               aria-label={isEnding ? endingLabel : endCallLabel}
-              onClick={handleHangUp}
+              onClick={handleEndCallButtonClick}
               disabled={isEnding}
             />
           ) : (
+            // Filled destructive red square + white icon — the SAME
+            // look the wide/bottom-bar host always kept. Per explicit
+            // follow-up ("treat it more like the button when at the
+            // bottom of screen with the red square shape and icon
+            // reversed inside it"): the rail's own `trailingControlsPlain`
+            // plain-icon treatment (branch above) is too easy to miss
+            // once there's an actual Leave/End-for-everyone choice
+            // behind it, so THIS specific control stays filled/
+            // prominent even in the rail whenever `showLeaveChoice` is
+            // true, same as the always-filled wide rendering below.
             <Button
               variant="destructive"
               size="icon"
               className="h-10 w-10 shrink-0"
-              onClick={handleHangUp}
+              onClick={handleEndCallButtonClick}
               disabled={isEnding}
+              title={isEnding ? endingLabel : endCallLabel}
               aria-label={isEnding ? endingLabel : endCallLabel}
             >
               {isEnding ? (
@@ -2020,24 +2436,78 @@ export function VoiceCallControls({
                 <PhoneOff className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
               )}
             </Button>
-          )}
-        </Tooltip>
-      ) : (
-        <Button
-          variant="destructive"
-          size="lg"
-          className="h-auto shrink-0 gap-1.5"
-          onClick={handleHangUp}
-          disabled={isEnding}
-        >
-          {isEnding ? (
-            <Spinner variant="circle" size="sm" color="inverse" label="Hanging up" />
-          ) : (
-            <PhoneOff className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
-          )}
-          {isEnding ? endingLabel : endCallLabel}
-        </Button>
-      )}
+          )
+        ) : showLeaveChoice ? (
+          // Split-button shape — per explicit follow-up request ("switch
+          // the 'end call' wording for an arrow or caret, indicating that
+          // clicking on it now will open additional choices. Sometimes
+          // called a split button if that's available in the lyra ui"):
+          // lyra-ui has no dedicated split-button primitive (confirmed —
+          // `interaction-composer.tsx`'s own "Send ▾" control is the one
+          // existing precedent for this exact shape, same doc comment
+          // worded almost identically: "hand-built from two adjacent
+          // `Button`s (rounded-r-none / rounded-l-none, a hairline divider
+          // between) since lyra-ui has no dedicated split-button
+          // component"). Copied verbatim here rather than inventing a new
+          // visual language for the same concept. Both segments call the
+          // SAME `handleEndCallButtonClick` — this is a purely VISUAL
+          // affordance hinting that a choice exists, not a second,
+          // differently-behaving click target; which of Leave/End-for-
+          // everyone actually happens is still decided entirely inside
+          // `EndCallChoiceMenu`, unchanged. Only rendered once
+          // `showLeaveChoice` is true — a plain 1:1 call keeps today's
+          // single, unsplit button below exactly as it already was.
+          // `items-stretch` (not `items-center`) + `h-auto` on both
+          // segments — same pairing this bar's own trailing cluster
+          // already relies on (see this file's own top doc comment on
+          // `h-auto`/`items-stretch`): without it, each segment would size
+          // to its own shorter natural content height inside this wrapper
+          // instead of both (and the hairline divider between them)
+          // stretching to the SAME full height the single button they're
+          // replacing already matched.
+          <div className="inline-flex items-stretch">
+            <Button
+              variant="destructive"
+              size="lg"
+              className="h-auto shrink-0 gap-1.5 rounded-r-none"
+              onClick={handleEndCallButtonClick}
+              disabled={isEnding}
+            >
+              {isEnding ? (
+                <Spinner variant="circle" size="sm" color="inverse" label="Hanging up" />
+              ) : (
+                <PhoneOff className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
+              )}
+              {isEnding ? endingLabel : endCallLabel}
+            </Button>
+            <Button
+              variant="destructive"
+              size="icon-lg"
+              className="h-auto shrink-0 rounded-l-none border-l border-white/25"
+              onClick={handleEndCallButtonClick}
+              disabled={isEnding}
+              aria-label="More end call options"
+            >
+              <ChevronDown className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
+            </Button>
+          </div>
+        ) : (
+          <Button
+            variant="destructive"
+            size="lg"
+            className="h-auto shrink-0 gap-1.5"
+            onClick={handleEndCallButtonClick}
+            disabled={isEnding}
+          >
+            {isEnding ? (
+              <Spinner variant="circle" size="sm" color="inverse" label="Hanging up" />
+            ) : (
+              <PhoneOff className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />
+            )}
+            {isEnding ? endingLabel : endCallLabel}
+          </Button>
+        )}
+      </Popover>
     </>
   );
 
@@ -2088,332 +2558,6 @@ export function VoiceCallControls({
         className
       )}
     >
-      {/* Consult banner — ported from the reference app's `ConsultBanner`
-          (see `ConferencePicker`'s own top doc comment for the full port
-          history). Sits above the normal control row, same as the
-          reference; the row itself is untouched underneath it (Hold's own
-          active/red styling is what shows the primary customer is on hold
-          during a consult — see `ConsultBanner`'s own doc comment). */}
-      {consult && (
-        <ConsultBanner
-          customerLabel={customerLabel ?? "Customer"}
-          customerOnHold={onHold}
-          consultName={consult.name}
-          consultOnHold={consult.isOnHold}
-          onToggleHold={handleSwapConsult}
-          onCancel={handleCancelConsult}
-          onMerge={handleMergeConsult}
-          onTransfer={handleTransferConsult}
-        />
-      )}
-      {/* Participant strip — ONE consolidated bar for BOTH "who's merged
-          into this call" mechanisms (a `colleagues` Conference and a
-          `mergedInteractions` Merge-Calls bridge), not two separate stacked
-          bars each repeating their own "You"/primary-customer pair. Per a
-          design critique (merging two live calls, then separately
-          consulting a colleague into one leg, produced two full-width
-          bars sitting on top of each other — "too much to keep track of"):
-          the duplicate "You"/customer chips were the actual bulk, not the
-          roster content itself, so folding both groups into one strip
-          — sharing a single "You"/customer pair up top — removes that
-          duplication outright rather than trying to shrink either bar
-          individually. A thin vertical divider (`h-5 w-px bg-lyra-border-
-          subtle`) separates the "You"/customer pair from each present
-          group, and separates the two groups from each other when both
-          are present, so the strip still reads as distinct clusters
-          despite sharing one box. Each group's pills also carry their own
-          `kind` tint (`ParticipantChip`'s own doc comment) so a colleague
-          and a bridged customer are visually distinguishable even without
-          the divider, since the whole point of this fix is that the two
-          should never look like the same kind of thing.
-
-          Each group keeps its OWN independent gating rather than one
-          blanket condition on the whole strip: the colleague group still
-          hides the instant a NEW consult starts (`!consult` —
-          `ConsultBanner` takes over that exact "who's on this call"
-          message while a consult is being set up, same as before), but the
-          merged-call group does NOT hide for an unrelated in-progress
-          consult — an agent who's both on a bridged call AND mid-consult
-          on one leg of it still needs to see the bridge/Un-merge/End-all
-          controls, same as prior to this consolidation. `showColleagues`/
-          `showMerged` below are what let the strip render with just one
-          group present (the other's chips and divider simply don't
-          render) without duplicating the "is there anything to show at
-          all" check three times.
-
-          Per a later explicit follow-up request ("when in a conference
-          state go back to each individual participant in its own pill
-          shape rather than a row ... set a border on the pill to help it
-          stand out"): this wrapping div no longer carries the shared
-          `rounded-lyra-md border ... bg-lyra-bg-surface-base px-3 py-2`
-          card treatment described below — that read as one continuous
-          ROW once enough pills sat inside it, not as a cluster of distinct
-          people. Each `ParticipantChip` now carries its own
-          `border border-lyra-border-subtle` (that component's own
-          className) instead, so every participant is its own visually
-          separate, bordered pill; this div is just a plain `flex-wrap`
-          layout container (no border/bg/padding of its own). `flex-wrap`
-          (was `overflow-x-auto`) — a horizontal scrollbar made sense for a
-          single continuous box, but a loose cluster of individually-
-          bordered pills reads better wrapping onto a second line than
-          clipping/scrolling. "You" gets no actions (`isSelf`); the primary
-          customer pill's own hold toggle is `setOnHold` DIRECTLY (not the
-          main Hold button below) — same "this pill only ever holds/
-          resumes the one person it represents" independence every
-          colleague pill already has. */}
-      {(() => {
-        const showColleagues = colleagues.length > 0 && !consult;
-        const showMerged = !!mergedInteractions?.length;
-        if (!showColleagues && !showMerged) return null;
-        // Per explicit follow-up request ("add a line connecting each pill
-        // to visually enhance the idea that all of these calls are
-        // joined"): flattened into one ordered list (rather than built
-        // inline via JSX conditionals/`.map()`s, as before) specifically so
-        // a short connector segment can be interleaved BETWEEN every
-        // adjacent pair below — a real sibling in the flex flow, not an
-        // absolutely-positioned overlay line, so it still wraps correctly
-        // onto a second line if the roster ever gets long enough to need
-        // one (an absolute full-width line behind everything would only
-        // connect pills on the SAME row). This same flat shape turned out
-        // to matter again for a LATER follow-up too ("when a participant is
-        // removed, the remaining pills come together — animate that more
-        // fluidly"): `framer-motion`'s `AnimatePresence` can only track
-        // enter/exit on its own DIRECT children — a `React.Fragment`
-        // wrapping a pill + its connector (this render loop's previous
-        // shape) hides them from it. See the render loop below for how this
-        // list turns into `motion.span`s instead.
-        // `rosterStacked ? "w-full" : undefined` on every pill below — see
-        // `rosterStacked`'s own doc comment for the full "why": stretches
-        // each pill to the stack's full column width instead of staying
-        // content-sized, only in that narrow/floating mode.
-        const chipClassName = rosterStacked ? "w-full" : undefined;
-        const chips: { key: string; node: React.ReactNode }[] = [
-          { key: "you", node: <ParticipantChip label="You" isSelf isOnHold={false} className={chipClassName} /> },
-          {
-            key: "customer",
-            node: (
-              <ParticipantChip
-                label={customerLabel ?? "Customer"}
-                isOnHold={onHold}
-                onToggleHold={() => setOnHold(!onHold)}
-                className={chipClassName}
-              />
-            ),
-          },
-          ...(showColleagues
-            ? colleagues.map((colleague) => ({
-                key: colleague.id,
-                node: (
-                  <ParticipantChip
-                    label={colleague.name}
-                    kind="colleague"
-                    isInternalAgent
-                    isOnHold={colleague.isOnHold}
-                    onToggleHold={() => handleToggleColleagueHold(colleague.id)}
-                    onTransfer={handleTransferColleague}
-                    onHangUp={() => handleDropColleague(colleague.id)}
-                    className={chipClassName}
-                  />
-                ),
-              }))
-            : []),
-          ...(showMerged
-            ? mergedInteractions!.map((interaction) => ({
-                key: interaction.id,
-                node: (
-                  <ParticipantChip
-                    label={interaction.name}
-                    kind="merged"
-                    onSelect={
-                      interaction.selectable !== false && onSelectMergedInteraction
-                        ? () => onSelectMergedInteraction(interaction.id)
-                        : undefined
-                    }
-                    className={chipClassName}
-                  />
-                ),
-              }))
-            : []),
-        ];
-        // Shared between both layouts below (horizontal-scroll and
-        // `rosterStacked`) — see `rosterStacked`'s own doc comment for why
-        // there are two layouts at all. Extracted into one function rather
-        // than duplicated per-layout specifically so the FLIP/enter-exit
-        // animation logic (the actual nontrivial part — `layout`,
-        // `popLayout`, the exact timings below) stays in exactly one place;
-        // only the connector/pill classNames differ between orientations,
-        // passed in as args.
-        //
-        // `layout` is the actual FLIP animation — framer-motion measures
-        // each pill's position before/after whatever triggered the
-        // re-render and smoothly animates the difference, instead of
-        // letting the browser's own layout engine just snap it straight to
-        // the new spot. `initial`/`animate`/`exit` are the pill's OWN
-        // join/leave motion (scale+fade) — unchanged in FEEL from the
-        // prior, simpler CSS-class version, just now expressed as
-        // framer-motion variants so `AnimatePresence` can delay the real
-        // unmount until `exit` finishes playing. Went 0.3s (the original
-        // CSS version) → 0.5s (per "more fluidly, rather than so quick") →
-        // settled at 0.35s/`easeOut` per a further explicit follow-up ("the
-        // conference animation when participant is dropped can be faster,
-        // 500ms too slow") — still visibly smoother/slower than the
-        // original 0.3s snap, just not as deliberate as the 0.5s pass read.
-        const renderRosterItems = (connectorClassName: string, pillClassName: string) =>
-          chips.flatMap((chip, i) => {
-            const connector =
-              i > 0 ? (
-                <motion.span
-                  key={`${chip.key}-connector`}
-                  layout
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.35, ease: "easeOut" }}
-                  aria-hidden="true"
-                  className={connectorClassName}
-                />
-              ) : null;
-            const pill = (
-              <motion.span
-                key={chip.key}
-                layout
-                initial={{ opacity: 0, scale: 0.5 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.5 }}
-                transition={{ duration: 0.35, ease: "easeOut" }}
-                className={pillClassName}
-              >
-                {chip.node}
-              </motion.span>
-            );
-            return connector ? [connector, pill] : [pill];
-          });
-
-        if (rosterStacked) {
-          return (
-            // Vertical stack, one pill per row — per explicit follow-up
-            // request ("need to be able to see all parties rather than a
-            // horizontal scroll. Likely stacking"): no scroll/chevrons at
-            // all here (unlike the horizontal layout just below) — this
-            // mode exists specifically so a SMALL, FIXED roster is fully
-            // visible at a glance in the narrow floating host; if it ever
-            // overflows the floating card's own current height, that
-            // card's own `overflow-y-auto` wrapper (`FloatingVoiceControls
-            // Anchor`) scrolls the whole thing vertically instead, which
-            // reads as "a longer list" rather than "a horizontal filmstrip
-            // of people," a more natural fit for a roster. Connector
-            // rotates from a horizontal line to a vertical one
-            // (`w-px h-3 mx-auto`, was `h-px w-4`) to match the new
-            // top-to-bottom flow; each pill is full-width (`chipClassName`,
-            // set when `chips` was built above) instead of content-sized.
-            <div className="mb-2 flex flex-col gap-1">
-              <AnimatePresence initial={false} mode="popLayout">
-                {renderRosterItems(
-                  "h-3 w-px shrink-0 self-center mx-auto bg-[color-mix(in_srgb,var(--lyra-color-border-strong)_60%,transparent)]",
-                  "flex w-full"
-                )}
-              </AnimatePresence>
-              {showMerged && onUnmergeCalls && (
-                <>
-                  <span className="my-1 h-px w-full shrink-0 bg-lyra-border-subtle" aria-hidden="true" />
-                  <button
-                    type="button"
-                    onClick={onUnmergeCalls}
-                    className="flex items-center gap-1.5 self-start rounded-full px-2 py-1 lyra-body-sm text-lyra-fg-secondary hover:bg-lyra-state-hover"
-                  >
-                    <Split className="h-3.5 w-3.5" strokeWidth={2} />
-                    Un-merge calls
-                  </button>
-                </>
-              )}
-            </div>
-          );
-        }
-
-        return (
-          // Was a plain `flex flex-wrap` row — per explicit follow-up
-          // report ("in a small width, the call controls and conference
-          // pills become messy"): once enough pills forced a wrap, the
-          // connector segment interleaved after whatever pill happened to
-          // fall last on a line (see each one's own doc comment below) had
-          // no next-pill-on-the-same-line to actually connect to — it just
-          // dangled off toward the row's right edge, reading as a broken
-          // line rather than a joined one. Switched to this design system's
-          // own existing scrollable-row-with-chevrons pattern instead
-          // (`useScrollChevrons`/`ScrollChevronButton`, newly re-exported
-          // from lyra-ui for this — see `rosterScrollRef`'s own doc comment
-          // above): the chip+connector row never wraps, so a connector is
-          // ALWAYS between two real, currently-adjacent pills; once the
-          // roster is wider than this strip's own available width, the
-          // chevrons appear and scrolling (not wrapping) is how the rest
-          // becomes reachable. The Un-merge action (below) stays OUTSIDE
-          // the scrollable area, same "critical/always-reachable controls
-          // are pinned, decorative content scrolls" split this file's main
-          // control bar already follows. `rosterStacked` (above) replaces
-          // this whole layout in the floating/narrow host instead — see
-          // that prop's own doc comment for why horizontal scroll stays
-          // right for THIS (wide bottom bar) rendering.
-          <div className="mb-2 flex items-center gap-1">
-            {rosterChevrons.canScrollStart && (
-              <ScrollChevronButton direction="left" onStep={() => (rosterScrollRef.current!.scrollLeft -= 8)} />
-            )}
-            <div
-              ref={rosterScrollRef}
-              onScroll={rosterChevrons.onScroll}
-              className="flex min-w-0 flex-1 flex-nowrap items-center overflow-x-auto lyra-scrollbar-hide"
-            >
-            <AnimatePresence initial={false} mode="popLayout">
-              {renderRosterItems(
-                "h-px w-4 shrink-0 self-center bg-[color-mix(in_srgb,var(--lyra-color-border-strong)_60%,transparent)]",
-                "inline-flex"
-              )}
-            </AnimatePresence>
-            </div>
-            {rosterChevrons.canScrollEnd && (
-              <ScrollChevronButton direction="right" onStep={() => (rosterScrollRef.current!.scrollLeft += 8)} />
-            )}
-            {showMerged && (
-              <>
-                {/* Group-level action (Un-merge only now) — per explicit
-                    follow-up ("look at end all icon for a merged call and
-                    the end call button from the original voice controls.
-                    They seem to be redundant in this scenario"): this strip
-                    used to ALSO carry its own "End all calls" icon +
-                    inline confirm right here, sitting next to the main
-                    bar's own big red "End Call" button below — two visible
-                    controls both ultimately ending the call(s), just with
-                    different (and non-obvious, icon-only) scope. Removed
-                    outright rather than relabeled: the main "End Call"
-                    button (below) now does its job instead — see
-                    `handleHangUp`'s own doc comment for how it picks the
-                    right scope (`onEndAllCalls` vs. plain `onHangUp`)
-                    depending on whether a merge is actually active, so
-                    there's exactly one visible "end" control regardless of
-                    which state the call is in. This divider is a real
-                    group boundary (roster vs. a control acting on the
-                    whole call), unlike the connector lines between pills
-                    above — kept as its own plain `w-px` rule rather than
-                    the connector's own styling, so the two read as
-                    different things. */}
-                <span className="ml-2 h-5 w-px shrink-0 bg-lyra-border-subtle" aria-hidden="true" />
-                <span className="ml-auto flex shrink-0 items-center gap-1">
-                  {onUnmergeCalls && (
-                    <button
-                      type="button"
-                      title="Un-merge calls"
-                      aria-label="Un-merge calls"
-                      onClick={onUnmergeCalls}
-                      className="flex h-6 w-6 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
-                    >
-                      <Split className="h-3.5 w-3.5" strokeWidth={2} />
-                    </button>
-                  )}
-                </span>
-              </>
-            )}
-          </div>
-        );
-      })()}
       {/* This card used to be one of three branches (wide two-row centered
           card / compact icon-only row / `stretch` single-row wide) picked
           by `stretch`+`isCompact` — see this file's own top doc comment
@@ -2551,99 +2695,16 @@ export function VoiceCallControls({
             {customerLabel && (
               <span className="flex min-w-0 items-center gap-1.5">
                 <span className="lyra-body-sm truncate text-lyra-fg-primary">{customerLabel}</span>
-                {/* Conference indicator — per explicit follow-up request
-                    ("show in the voice control bar that there is a
-                    conference happening. A label and/or icon calling
-                    attention that this call is in a conference"): once any
-                    colleague is actually merged in. Same `Users` glyph the
-                    left-nav assignment card now also shows for this exact
-                    state (`InteractionNavItemProps.isConferenceCall`,
-                    interaction-nav-item.tsx) — one consistent "this is a
-                    conference" signal across both surfaces.
-
-                    Per a design critique (this one "Conference" tag used to
-                    ALSO cover a Merge-Calls bridge — two structurally
-                    different relationships rendering as the exact same
-                    chip, with no way to tell which kind of multi-party
-                    state was actually active): this tag is now SCOPED to
-                    `colleagues` only — an internal agent/skill merged into
-                    this one customer's own thread — and a second, separate
-                    "Merged call" tag (below) covers the bridged-interaction
-                    case instead. Both can render at once (gap-1 between
-                    them via the parent's own `gap-1.5`), reflecting that
-                    they really are two independent things that can both be
-                    true on the same call at the same time — collapsing
-                    that reality down to a single chip is exactly what
-                    created the ambiguity. */}
-                {colleagues.length > 0 && (
-                  // Per explicit follow-up request ("make the conference
-                  // pill stand out more, move it away from the name a
-                  // little bit so it is more noticeable, change color, try a
-                  // little animation bubble effect"): `ml-2` on top of this
-                  // row's own `gap-1.5` gives the pill noticeably more
-                  // breathing room from the customer name specifically
-                  // (the "Merged call" tag right after it, if also showing,
-                  // stays at the plain `gap-1.5` distance — the ask was
-                  // separation from the NAME, not from this tag's own
-                  // neighbor). `purple` (was `info`/blue, which read as just
-                  // another status chip) is one of Tag's three fixed
-                  // categorical-accent variants, same family "Merged call"
-                  // already uses (`teal`) but a visually distinct hue, so
-                  // the two multi-party tags don't read as the same color
-                  // family. Per a round of later explicit follow-ups (full
-                  // history on `conferenceBubbling`'s own doc comment
-                  // above): a single grow-then-settle scale read as a
-                  // little flat ("a bit more lively ... like two bubbles so
-                  // it seems more organic"), so this is now a `framer-
-                  // motion` keyframe-array animation — two visible rebounds
-                  // (100% → 130% → 90% → 110% → 100%) instead of one smooth
-                  // ease — on a plain wrapping `motion.span` around the
-                  // otherwise-unchanged `Tag`, delayed half a second after
-                  // the roster actually changes. `animate`'s own value only
-                  // ever switches between a static `1` and the keyframe
-                  // array (never torn down mid-flight some other way), so
-                  // framer-motion always plays the full sequence once per
-                  // real `conferenceBubbling` flip rather than needing this
-                  // component to hand-manage individual animation steps.
-                  <motion.span
-                    className="ml-2 inline-flex shrink-0"
-                    animate={{ scale: conferenceBubbling ? [1, 1.3, 0.9, 1.1, 1] : 1 }}
-                    transition={{
-                      duration: BUBBLE_DURATION_MS / 1000,
-                      times: [0, 0.25, 0.5, 0.75, 1],
-                      ease: "easeInOut",
-                    }}
-                  >
-                    <Tag
-                      label="Conference"
-                      variant="purple"
-                      shape="pill"
-                      icon={<Users className="h-3 w-3" strokeWidth={1.5} />}
-                    />
-                  </motion.span>
-                )}
-                {/* Merged-call indicator — a Merge-Calls bridge (two fully
-                    separate Interactions spliced together), distinct from
-                    the internal "Conference" case above. Reuses `Merge`,
-                    the SAME icon the "Merge Calls" kebab menu item already
-                    uses (channel-row.tsx) — one consistent glyph for this
-                    concept across the entry point and the resulting state,
-                    same reasoning the Conference tag's own `Users` glyph
-                    already follows for ITS concept. `teal` (one of Tag's
-                    three fixed categorical-accent variants — see
-                    `TagVariant`'s own doc comment, tag.tsx) rather than
-                    `info` specifically so it reads as a visually distinct
-                    category from the blue "Conference" tag, not a second
-                    copy of the same status color. */}
-                {!!mergedInteractions?.length && (
-                  <Tag
-                    label="Merged call"
-                    variant="teal"
-                    shape="pill"
-                    className="shrink-0"
-                    icon={<Merge className="h-3 w-3" strokeWidth={1.5} />}
-                  />
-                )}
+                {/* Conference/Merged tags — rendered inline with the name
+                    here ONLY in the wide/bottom-bar host. In the narrow
+                    rail (`trailingControlsPlain`), they move to their own
+                    line below instead (after the timer/hold-timer lines,
+                    still above the decorative control icons) — per
+                    explicit follow-up request ("move the conference pill
+                    in the left rail view under the timer and above the
+                    controls"): competing with the name for this same
+                    narrow line crowded/truncated it unnecessarily there. */}
+                {!trailingControlsPlain && conferenceTags}
               </span>
             )}
             {/* Timer — moved here from its old trailing position (see this
@@ -2692,6 +2753,36 @@ export function VoiceCallControls({
               <span className="w-[34px] shrink-0 text-right tabular-nums">{formatElapsedTime(elapsedSeconds)}</span>
             </span>
           )}
+          {/* Hold timer — per explicit follow-up request ("remove the
+              Resume timer in the voice control/hold component. Simply list
+              a hold timer in red under the normal call timer"): the
+              Hold/Resume button's own label no longer carries `· MM:SS`
+              (see that button's own doc comment) — this is where that same
+              duration (`heldElapsedLabel`, unchanged/still computed above)
+              moved to instead, as its own line directly under the main
+              call-duration line above, in the same red
+              (`text-lyra-status-critical-strong`) this app's whole "on
+              hold" color language now uses (`OnHoldPill`/`ParticipantChip`/
+              this bar's own Hold/Resume button). Reuses the label text
+              `OnHoldPill` already showed ("On Hold · MM:SS") rather than a
+              bare number on its own, so this reads the same wherever an
+              agent sees it. */}
+          {onHold && heldElapsedLabel && (
+            <span className="lyra-body-xs text-lyra-status-critical-strong">
+              On Hold · <span className="tabular-nums">{heldElapsedLabel}</span>
+            </span>
+          )}
+          {/* Rail-only placement — see `conferenceTags`'s own doc comment
+              (near its definition, above the return statement) for the
+              full "why". `showLeaveChoice` is the same underlying
+              condition (`colleagues.length > 0 || !!mergedInteractions
+              ?.length`) as what actually gates `conferenceTags`'s own
+              content — reused here rather than re-deriving it, purely to
+              avoid rendering an empty wrapping `span` when neither tag
+              actually applies. */}
+          {trailingControlsPlain && showLeaveChoice && (
+            <span className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">{conferenceTags}</span>
+          )}
           </div>
         </div>
         <div className="flex min-w-0 flex-auto items-stretch justify-center gap-1">
@@ -2727,7 +2818,23 @@ export function VoiceCallControls({
               center` still centers its own children within it whenever
               there's enough room for everything on one line — the common,
               wide-desktop case is visually unchanged. */}
-          <div className="flex min-w-0 flex-wrap items-stretch gap-1">
+          <div
+            className={cn(
+              "flex min-w-0 flex-wrap items-stretch gap-1",
+              // Per explicit follow-up request ("spread the voice controls
+              // across the container so they're more centered"): this inner
+              // cluster used to just size itself to its own content and get
+              // centered as ONE block by the outer slot's `justify-center`
+              // — fine on a wide bottom bar where everything fits on one
+              // row, but in the narrow rail (`trailingControlsPlain`,
+              // `mergeTrailingIntoCluster`'s multi-row wrap) it read as a
+              // small, off-center clump instead of actually using the
+              // row's full width. `w-full justify-between` here makes this
+              // cluster claim the full row and spread each wrapped LINE's
+              // icons evenly across it instead.
+              trailingControlsPlain && "w-full justify-between"
+            )}
+          >
           {/* Decorative cluster — Hold/Mask/Record/Keypad/Consult (Transcript
               and Volume were removed outright, per explicit request),
               unchanged in behavior/styling from before, just relocated out
@@ -2789,7 +2896,15 @@ export function VoiceCallControls({
               content is genuinely EXTRA information ("why is this
               disabled") beyond what a two-word label can hold. */}
           {controlsCompact ? (
-            <Tooltip content={onHold ? `Resume${heldElapsedLabel ? ` · ${heldElapsedLabel}` : ""}` : "Hold"} placement="top">
+            // No more `· MM:SS` suffix on "Resume" — per explicit follow-up
+            // request ("remove the Resume timer in the voice control/hold
+            // component. Simply list a hold timer in red under the normal
+            // call timer"): `heldElapsedLabel` itself is unchanged/still
+            // computed above, just no longer read here — it now drives the
+            // new red hold-timer line in the identity column instead (see
+            // that span's own doc comment, right after the main elapsed-
+            // time span above).
+            <Tooltip content={onHold ? "Resume" : "Hold"} placement="top">
               <CompactCallControlButton
                 icon={onHold ? <Play className="h-5 w-5" strokeWidth={1.5} /> : <Pause className="h-5 w-5" strokeWidth={1.5} />}
                 active={onHold}
@@ -2826,7 +2941,9 @@ export function VoiceCallControls({
           ) : (
             <WideCallControlButton
               icon={onHold ? <Play className="h-5 w-5" strokeWidth={1.5} /> : <Pause className="h-5 w-5" strokeWidth={1.5} />}
-              label={onHold ? `Resume${heldElapsedLabel ? ` · ${heldElapsedLabel}` : ""}` : "Hold"}
+              // No more `· MM:SS` suffix — see the compact variant's own
+              // identical comment just above.
+              label={onHold ? "Resume" : "Hold"}
               active={onHold}
               // Red (critical), not amber (warning) — see the compact
               // variant's own identical comment just above.
@@ -3003,7 +3120,7 @@ export function VoiceCallControls({
                 label="Keypad"
                 active={keypadOpen}
                 aria-label="Keypad"
-                // See `isEnding`'s own doc comment above — `handleHangUp`
+                // See `isEnding`'s own doc comment above — `beginHangUpSequence`
                 // also force-closes this popover directly (`setKeypadOpen
                 // (false)`) rather than relying on this alone, since
                 // `disabled` only blocks NEW opens, not one already open.
@@ -3031,7 +3148,7 @@ export function VoiceCallControls({
               (`setConsult`, `handleCancelConsult`/`handleMergeConsult`
               above), auto-holding the primary customer exactly the way the
               reference's `startVoiceCallConsult` does, with
-              `ConsultBanner`/the participant strip (both rendered above
+              `ConsultCard`/the roster disclosure (both rendered above
               this row, below) as the actual merge UI. `disabled` includes
               `!!consult` — only one consult can be in flight at a time,
               same as the reference (there's no second Cancel/Merge banner
@@ -3083,8 +3200,11 @@ export function VoiceCallControls({
             // while `consultAnchorRef.current` is actually set (opened from
             // somewhere other than this bar's own Consult button, which
             // never has this race since it's not inside a closing dropdown).
+            // `consultAnchorJustSetRef` (above) covers the OTHER version of
+            // this same race this `.contains()` check alone can't — see its
+            // own doc comment.
             onInteractOutside={(e: Event) => {
-              if (consultAnchorRef?.current?.contains(e.target as Node)) {
+              if (consultAnchorJustSetRef.current || consultAnchorRef?.current?.contains(e.target as Node)) {
                 e.preventDefault();
               }
             }}
@@ -3096,6 +3216,17 @@ export function VoiceCallControls({
                   setConferenceOpen(false);
                   setConsult({ id: person.id, name: person.name, isOnHold: false });
                   setOnHold(true);
+                  // Per explicit follow-up request ("have the participant
+                  // dropdown collapsed when in a consult. It helps keep
+                  // things simpler"): force the roster disclosure closed
+                  // the moment a NEW consult starts, regardless of
+                  // whatever expand state it was already in — an agent
+                  // who'd left the roster open while just managing the
+                  // plain conference shouldn't suddenly see it still open,
+                  // now additionally crowded by the new (read-only, per
+                  // the "entire conference is either on hold or not" rule)
+                  // peek content once a consult begins.
+                  setRosterExpanded(false);
                 }}
                 joinableCall={joinableCall}
                 onJoinCall={
@@ -3106,6 +3237,7 @@ export function VoiceCallControls({
                       }
                     : undefined
                 }
+                skillOptions={skillOptions}
               />
             }
           >
@@ -3139,7 +3271,7 @@ export function VoiceCallControls({
                 label="Consult"
                 active={conferenceOpen}
                 aria-label="Consult"
-                // See `isEnding`'s own doc comment above — `handleHangUp`
+                // See `isEnding`'s own doc comment above — `beginHangUpSequence`
                 // also force-closes this popover directly (`setConference
                 // Open(false)`) rather than relying on this alone, same
                 // reasoning Keypad's identical prop already gives.
@@ -3219,6 +3351,215 @@ export function VoiceCallControls({
         </div>
         {!mergeTrailingIntoCluster && (
           <div className="flex shrink-0 items-stretch gap-2">{trailingButtons}</div>
+        )}
+        {/* Consult card + conference/merged-call roster — ONE shared
+            section living INSIDE this same bordered card, under the main
+            controls, rather than as separate boxes stacked above it (an
+            earlier pass rendered each as its own bordered box above this
+            one — per explicit follow-up, "it only needs one [container],
+            put the participant list and the consult flow under the main
+            controls"). `showLeaveChoice` (already computed above, same
+            `colleagues.length > 0 || !!mergedInteractions?.length`
+            condition) gates the section's own divider/padding — nothing
+            extra renders for a plain 1:1 call. `ConsultCard` (when
+            consulting) sits above the roster disclosure when both are
+            present, matching this file's existing stacking order. */}
+        {(consult || showLeaveChoice) && (
+          <div className="flex w-full flex-col gap-2 border-t border-lyra-border-subtle pt-2">
+            {consult && (
+              <ConsultCard
+                consultName={consult.name}
+                consultOnHold={consult.isOnHold}
+                onToggleHold={handleSwapConsult}
+                onCancel={handleCancelConsult}
+                onMerge={handleMergeConsult}
+                onTransfer={handleTransferConsult}
+                trailingControlsPlain={trailingControlsPlain}
+              />
+            )}
+            {(() => {
+              const hasRoster = colleagues.length > 0 || !!mergedInteractions?.length;
+              if (!hasRoster) return null;
+              const rosterInteractive = !consult;
+              const showMerged = !!mergedInteractions?.length;
+              const chips: { key: string; node: React.ReactNode }[] = [
+                { key: "you", node: <ParticipantRow label="You" isSelf isOnHold={false} /> },
+                {
+                  key: "customer",
+                  node: (
+                    <ParticipantRow
+                      label={customerLabel ?? "Customer"}
+                      isOnHold={onHold}
+                      onToggleHold={rosterInteractive ? () => setOnHold(!onHold) : undefined}
+                    />
+                  ),
+                },
+                ...colleagues.map((colleague) => ({
+                  key: colleague.id,
+                  node: (
+                    <ParticipantRow
+                      label={colleague.name}
+                      kind="colleague"
+                      isInternalAgent={colleague.isInternalAgent ?? true}
+                      // Read-only peek (mid-consult): every row shares the
+                      // SAME current hold state as the customer (`onHold`),
+                      // not each colleague's own `isOnHold` — see this
+                      // section's own top doc comment.
+                      isOnHold={rosterInteractive ? colleague.isOnHold : onHold}
+                      onToggleHold={rosterInteractive ? () => handleToggleColleagueHold(colleague.id) : undefined}
+                      // Only an agent or skill gets a Transfer icon — a
+                      // dialpad-dialed outbound number (`isInternalAgent:
+                      // false`) isn't a real colleague to hand the call off
+                      // to, so it only ever shows Hold/Hang Up, per explicit
+                      // follow-up request ("only an agent or skill will show
+                      // a transfer icon. Every other participant type
+                      // including the dialpad outbound shows only the hold
+                      // or hangup icons").
+                      onTransfer={
+                        rosterInteractive && (colleague.isInternalAgent ?? true) ? handleTransferColleague : undefined
+                      }
+                      onHangUp={rosterInteractive ? () => handleDropColleague(colleague.id) : undefined}
+                    />
+                  ),
+                })),
+                ...(showMerged
+                  ? mergedInteractions!.map((interaction) => ({
+                      key: interaction.id,
+                      node: (
+                        <ParticipantRow
+                          label={interaction.name}
+                          kind="merged"
+                          onSelect={
+                            interaction.selectable !== false && onSelectMergedInteraction
+                              ? () => onSelectMergedInteraction(interaction.id)
+                              : undefined
+                          }
+                        />
+                      ),
+                    }))
+                  : []),
+              ];
+              // A small overlapping-circles preview next to the toggle's own
+              // count — per explicit follow-up request ("bring some visual
+              // attention to the conferencing participant list... a few
+              // small overlapping avatar circles next to '3 participants',
+              // like Slack/Teams/Zoom roster previews"). Same avatar
+              // look/color each `ParticipantRow` already uses per `kind`
+              // (colleague = blue/headset, merged = teal, customer = plain
+              // initials) — "You" excluded, same as the toggle's own count
+              // (`chips.length - 1`) already excludes it. Capped at 3 visible
+              // circles with a "+N" overflow badge, so a large conference
+              // doesn't blow out this toggle's own compact width.
+              const previewEntries: { key: string; label: string; isInternalAgent: boolean; kind?: "colleague" | "merged" }[] = [
+                { key: "customer", label: customerLabel ?? "Customer", isInternalAgent: false },
+                ...colleagues.map((colleague) => ({ key: colleague.id, label: colleague.name, isInternalAgent: colleague.isInternalAgent ?? true, kind: "colleague" as const })),
+                ...(showMerged
+                  ? mergedInteractions!.map((interaction) => ({ key: interaction.id, label: interaction.name, isInternalAgent: false, kind: "merged" as const }))
+                  : []),
+              ];
+              const visiblePreviewEntries = previewEntries.slice(0, 3);
+              const previewOverflowCount = previewEntries.length - visiblePreviewEntries.length;
+              const avatarStack = (
+                <span className="flex shrink-0 items-center">
+                  {visiblePreviewEntries.map((entry, i) => (
+                    <span
+                      key={entry.key}
+                      aria-hidden="true"
+                      className={cn(
+                        "flex h-5 w-5 shrink-0 items-center justify-center rounded-full ring-2 ring-lyra-bg-surface-container-subtle lyra-body-xs-emphasis",
+                        i > 0 && "-ml-1.5",
+                        entry.kind === "colleague"
+                          ? "bg-lyra-status-info-subtle text-lyra-status-info-strong"
+                          : entry.kind === "merged"
+                            ? "bg-lyra-accent-teal-soft text-lyra-accent-teal-strong"
+                            // Solid primary blue, not the neutral
+                            // `bg-lyra-bg-surface-container-subtle` fill —
+                            // per explicit follow-up request ("don't allow
+                            // a white avatar, or any avatar color that is
+                            // too close to the background colors across
+                            // the project"): that token IS this toggle's
+                            // own surrounding card background, so the
+                            // customer's circle was reading as invisible
+                            // rather than just muted. Same pairing
+                            // `ParticipantRow`'s own default avatar now
+                            // uses, for the identical reason.
+                            : "bg-lyra-bg-primary text-lyra-fg-on-primary"
+                      )}
+                      style={{ zIndex: visiblePreviewEntries.length - i }}
+                    >
+                      {entry.isInternalAgent ? (
+                        <Headset className="h-2.5 w-2.5" strokeWidth={1.5} />
+                      ) : (
+                        <span style={{ fontSize: "9px" }}>{initialsFor(entry.label)}</span>
+                      )}
+                    </span>
+                  ))}
+                  {previewOverflowCount > 0 && (
+                    // Solid dark-neutral fill (not another blue/teal — this
+                    // isn't a real person) + light text, same "don't allow
+                    // a color too close to the background" fix as every
+                    // other avatar above.
+                    <span
+                      aria-hidden="true"
+                      className="-ml-1.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-lyra-fg-secondary text-lyra-fg-on-primary ring-2 ring-lyra-bg-surface-container-subtle"
+                      style={{ fontSize: "9px" }}
+                    >
+                      +{previewOverflowCount}
+                    </span>
+                  )}
+                </span>
+              );
+              return (
+                // Per explicit follow-up request ("set a maximum width for
+                // the participant list when at bottom of screen"): the wide
+                // bottom-bar host otherwise stretches this list (and its own
+                // toggle button) edge-to-edge of however wide the bar
+                // happens to be — capped here instead, same "narrow,
+                // readable column" treatment a roster is meant to have
+                // regardless of how much raw width the surrounding bar has.
+                // Left-aligned (no `mx-auto`) per a later explicit follow-up
+                // ("the participant list at the bottom of screen can be
+                // left-aligned, still with a maximum width") rather than
+                // centered — matches the identity block/controls above it,
+                // which are themselves left-anchored, not centered as a
+                // block. The rail host (`trailingControlsPlain`) already IS
+                // narrow by nature, so it keeps the full-width behavior.
+                <div className={cn("w-full", !trailingControlsPlain && "max-w-sm")}>
+                  <button
+                    type="button"
+                    onClick={() => setRosterExpanded((e) => !e)}
+                    aria-expanded={rosterExpanded}
+                    className="flex w-full items-center gap-1.5 rounded-lyra-sm px-1 py-1 lyra-body-sm text-lyra-fg-secondary hover:bg-lyra-state-hover"
+                  >
+                    {avatarStack}
+                    {chips.length - 1} {chips.length - 1 === 1 ? "participant" : "participants"}
+                    <ChevronDown
+                      className={cn("ml-auto h-3.5 w-3.5 transition-transform", rosterExpanded && "rotate-180")}
+                      strokeWidth={1.5}
+                      aria-hidden="true"
+                    />
+                  </button>
+                  {rosterExpanded && (
+                    <div className="divide-y divide-lyra-border-subtle">
+                      {chips.map((chip) => (
+                        <React.Fragment key={chip.key}>{chip.node}</React.Fragment>
+                      ))}
+                      {showMerged && onUnmergeCalls && (
+                        <button
+                          type="button"
+                          onClick={onUnmergeCalls}
+                          className="flex w-full items-center gap-1.5 px-2 py-1.5 lyra-body-sm text-lyra-fg-secondary hover:bg-lyra-state-hover"
+                        >
+                          <Split className="h-3.5 w-3.5" strokeWidth={2} />
+                          Un-merge calls
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
         )}
       </div>
     </div>

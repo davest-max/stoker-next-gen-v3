@@ -220,6 +220,12 @@ import {
   type VoiceControlsPosition,
 } from "@/components/agent-next-gen-voice-controls-position";
 import { VoiceControlsPositionSetting } from "@/components/agent-next-gen-voice-controls-position-setting";
+import {
+  getDashboardView,
+  setDashboardView,
+  type DashboardView,
+} from "@/components/agent-next-gen-dashboard-view";
+import { DashboardViewSetting } from "@/components/agent-next-gen-dashboard-view-setting";
 import { MergedCallNavCard } from "@/components/agent-next-gen-merged-call-nav-card";
 import { VideoCallWindow, VideoCallFullScreen } from "@/components/agent-next-gen-video-window";
 import {
@@ -580,7 +586,21 @@ function InteractionNavCard({
 }: InteractionNavCardProps) {
   return !expanded ? (
     <div className="relative">
-      <InteractionNavItem expanded={expanded} onHold={onHold} {...itemProps} headerAction={headerAction} />
+      {/* `onHoldStyle="plain"` here too — per a later explicit follow-up
+          ("remove the yellow background and gold border from the collapsed
+          state of the assignment tile. match the behavior of the expanded
+          assignment tile"): the narrower collapsed-rail scope this prop was
+          originally left out of (see this function's other branch, below)
+          is now in scope too — both tiles read the same prop, so neither
+          can drift from the other again. `OnHoldCornerBadge` (just below)
+          is still this tile's own on-hold signal, same as before. */}
+      <InteractionNavItem
+        expanded={expanded}
+        onHold={onHold}
+        onHoldStyle="plain"
+        {...itemProps}
+        headerAction={headerAction}
+      />
       {currentChannelType && showChannelBadge && (
         <CollapsedChannelBadge type={currentChannelType} severity={badgeSeverity} />
       )}
@@ -593,7 +613,22 @@ function InteractionNavCard({
       {(onHold || manuallyHeld) && <OnHoldCornerBadge />}
     </div>
   ) : (
-    <InteractionNavItem expanded={expanded} onHold={onHold} {...itemProps} headerAction={headerAction} />
+    // `onHoldStyle="plain"` — per explicit follow-up request ("remove the
+    // yellow background and gold/brown colored border. Show the hold pill
+    // to indicate hold status and match a generic unselected tile: white
+    // with subtle gray border and no shadow"): the expanded assignment
+    // tile no longer gets the whole-card warning paint while on hold —
+    // `OnHoldPill` (rendered via this card's own `elapsedOverride`
+    // elsewhere) is now the only "on hold" signal. The collapsed-rail
+    // compact tile above now matches (see its own comment) — no longer a
+    // scope difference between the two.
+    <InteractionNavItem
+      expanded={expanded}
+      onHold={onHold}
+      onHoldStyle="plain"
+      {...itemProps}
+      headerAction={headerAction}
+    />
   );
 }
 
@@ -1521,6 +1556,108 @@ function MarcusWebbCopilotCard({
   );
 }
 
+// Pre-seeded test scenario — per explicit request ("prepare this project
+// for customer feedback and testing... three existing voice calls already
+// going upon page load, one of which is already a conference call with
+// eight total participants. Participants are a mix of agents, skills and
+// dialpad outbound numbers"). Gated behind `SEED_TEST_INTERACTIONS` (see
+// that flag's own doc comment, near `interactions`' own `useState` below)
+// so turning it off again is a one-line revert, same "hide, don't destroy"
+// convention `SHOW_MARCUS_DECISION_CARD`/the old `SHOW_CONTACT_HISTORY_CARD`
+// already establish in this file. Module-level (not inside the component)
+// since it's pure static data with no dependency on any live state —
+// `startTick` values are small NEGATIVE offsets rather than reads of the
+// live `clockTick` (which only exists inside the component, and starts at
+// 0 on mount anyway): `clockTick - startTick` is this app's own elapsed-
+// time formula everywhere else, so a negative `startTick` here is exactly
+// equivalent to "this call has already been running for N ticks" the
+// moment the page loads, with no need to coordinate with `clockTick`
+// itself. Real agent/skill ids+names (`OUTBOUND_AGENTS`/`OUTBOUND_SKILLS`,
+// agent-next-gen-outbound-data.tsx) so the seeded conference's roster
+// matches records the rest of this app already knows about, rather than
+// inventing disconnected names.
+const TEST_SEED_PLAIN_CALL_1: Interaction = {
+  id: "test-seed:nathan-cole",
+  interactionId: generateInteractionId(),
+  customerName: "Nathan Cole",
+  customerId: generateCaseId(),
+  threads: [
+    {
+      id: "voice",
+      type: "voice",
+      startTick: -1240,
+      preview: OUTBOUND_CONFIG.skillOptions.find((s: { value: string }) => s.value === "technical")?.label,
+      value: "(206) 555-0142",
+      addressLabel: "(206) 555-0142",
+      contactId: generateContactId(),
+      direction: "outbound",
+      // Not the focused card on load (see `TEST_SEED_CONFERENCE_CALL` below,
+      // which is) — stamped the same way `switchActiveInteraction` already
+      // would once a different card becomes active, so this immediately
+      // reads as "on hold" in the left nav instead of looking live despite
+      // not being focused.
+      backgroundedSinceTick: -40,
+    },
+  ],
+  currentThreadId: "voice",
+};
+const TEST_SEED_PLAIN_CALL_2: Interaction = {
+  id: "test-seed:priya-anand",
+  interactionId: generateInteractionId(),
+  customerName: "Priya Anand",
+  customerId: generateCaseId(),
+  threads: [
+    {
+      id: "voice",
+      type: "voice",
+      startTick: -610,
+      preview: OUTBOUND_CONFIG.skillOptions.find((s: { value: string }) => s.value === "billing")?.label,
+      value: "(312) 555-0199",
+      addressLabel: "(312) 555-0199",
+      contactId: generateContactId(),
+      direction: "outbound",
+      backgroundedSinceTick: -15,
+    },
+  ],
+  currentThreadId: "voice",
+};
+const TEST_SEED_CONFERENCE_CALL: Interaction = {
+  id: "test-seed:jordan-reyes",
+  interactionId: generateInteractionId(),
+  customerName: "Jordan Reyes",
+  customerId: generateCaseId(),
+  threads: [
+    {
+      id: "voice",
+      type: "voice",
+      startTick: -2150,
+      preview: OUTBOUND_CONFIG.skillOptions.find((s: { value: string }) => s.value === "vip")?.label,
+      value: "(503) 555-0176",
+      addressLabel: "(503) 555-0176",
+      contactId: generateContactId(),
+      direction: "outbound",
+      // 8 total roster rows (You + customer + these 6) — confirmed via
+      // follow-up Q&A. 3 real agents + 1 skill queue (all internal,
+      // `isInternalAgent` omitted ⇒ defaults `true`) + 2 dialpad-dialed
+      // outbound numbers (`isInternalAgent: false` — plain initials
+      // avatar, not a headset, once `ParticipantRow`/the roster preview
+      // read this field).
+      colleagues: [
+        ...OUTBOUND_AGENTS.slice(0, 3).map((agent: CreateNewOutboundContact) => ({ id: agent.id, name: agent.name })),
+        { id: OUTBOUND_SKILLS[1].id, name: OUTBOUND_SKILLS[1].name },
+        { id: "test-seed:dialpad-1", name: "(415) 555-0108", isInternalAgent: false },
+        { id: "test-seed:dialpad-2", name: "(646) 555-0134", isInternalAgent: false },
+      ],
+    },
+  ],
+  currentThreadId: "voice",
+};
+const TEST_SEED_INTERACTIONS: Interaction[] = [
+  TEST_SEED_PLAIN_CALL_1,
+  TEST_SEED_PLAIN_CALL_2,
+  TEST_SEED_CONFERENCE_CALL,
+];
+
 export function AgentWorkspace2WithDeskPage({
   showPageHeader = false,
   showPanelToggle = false,
@@ -1565,30 +1702,44 @@ export function AgentWorkspace2WithDeskPage({
   // interaction comes in" doc comments further down for the auto-open that
   // used to do that and was explicitly dropped.
   const [navOpen, setNavOpen] = useState(true);
-  // "Hide, don't destroy" — per explicit request ("keep the contact history
-  // work but hide it so I can put something else in its place for a new
-  // scenario"), same pattern `hiddenFromGroupList` (agent-next-gen-
-  // outbound-data.tsx's own "customers" entry)/`SHOW_MARCUS_
-  // DECISION_CARD` already establish elsewhere in this app: a single flag
-  // gates which card renders in this slot on the Home dashboard, with
-  // `ContactHistoryCard`'s own render call, `historyByRange`/
-  // `selectedContactHistoryEntry` state, and every handler that feeds it
-  // left fully in place below — flipping this back to `true` is a one-line
-  // revert, not a re-authoring. `false` here renders `EmailFocusCard`
-  // instead (agent-next-gen-email-focus-card.tsx) — a debate-stage mockup
-  // for an email-heavy-workload scenario (a dozen-ish "Pending" emails
-  // awaiting a customer reply, what auto-routing assigned while the agent
-  // was logged out, and a flagged incoming email that looks like it needs
-  // to jump the queue) that doesn't need Contact History's own "what did I
-  // just finish" framing.
-  const SHOW_CONTACT_HISTORY_CARD = false;
+  // Which card renders in this Home dashboard slot — `ContactHistoryCard`
+  // ("what did I just finish") or `EmailFocusCard` ("My Emails", an email-
+  // heavy-workload mockup: a dozen-ish "Pending" emails awaiting a customer
+  // reply, what auto-routing assigned while the agent was logged out, and
+  // a flagged incoming email that looks like it needs to jump the queue).
+  // Used to be a hardcoded `const SHOW_CONTACT_HISTORY_CARD = false` (a
+  // "hide, don't destroy" flag, per the original explicit request to keep
+  // Contact History's own code in place while something else occupied this
+  // slot) — now a real, persisted Settings choice instead (per later
+  // explicit request: "give our test user the option for a 'My Email' view
+  // or 'Contact History' view in the dashboard"), same controlled-
+  // component/localStorage shape `voiceControlsPosition` already
+  // establishes just below (see `DashboardViewSetting`'s own doc comment
+  // for why this stays controlled rather than self-contained).
+  const [dashboardView, setDashboardViewState] = useState<DashboardView>(() => getDashboardView());
   // No interactions exist until the agent launches one from the CreateNew
   // menu (Start Interaction / quick dial) — see handleStartCall/handleQuick
   // Dial below. Click any resulting InteractionNavItem card to make it the
   // active one. `initialInteraction` (see above) seeds this instead, for
   // callers that want to start already mid-call.
+  //
+  // `SEED_TEST_INTERACTIONS` — per explicit request to prepare this page
+  // for a real customer testing round (see `TEST_SEED_INTERACTIONS`'s own
+  // doc comment, above the component): a single flag, same "hide, don't
+  // destroy" convention as `SHOW_MARCUS_DECISION_CARD` elsewhere in this
+  // file — flipping it back to `false` is a one-line revert to today's
+  // always-starts-empty behavior, not a re-authoring. Only applies when
+  // `initialInteraction` isn't already seeding something (that prop still
+  // wins, same as before this change).
+  const SEED_TEST_INTERACTIONS = true;
+  // Gates the simulated "customer replied" toast (Sofia Sullivan, 20s after
+  // mount — see that effect's own doc comment, below) off for the real
+  // customer-test build, per explicit request ("hide the Sofia Sullivan
+  // toast that automatically appears for this testing scenario"). Same
+  // "hide, don't destroy" convention as `SEED_TEST_INTERACTIONS` just above.
+  const SHOW_SIMULATED_EMAIL_REPLY_TOAST = false;
   const [interactions, setInteractions] = useState<Interaction[]>(
-    () => (initialInteraction ? [initialInteraction] : [])
+    () => initialInteraction ? [initialInteraction] : SEED_TEST_INTERACTIONS ? TEST_SEED_INTERACTIONS : []
   );
   // Real "Assignments resolved today" count — previously read by the
   // dashboard header's own `SHOW_RESOLVED_TODAY_CHIP`-gated Badge (see
@@ -2072,6 +2223,21 @@ export function AgentWorkspace2WithDeskPage({
   // OPTIONS`) — so this control starts out reproducing the exact same
   // order as before it existed.
   const [assignmentSortDirection, setAssignmentSortDirection] = useState<AssignmentSortDirection>("desc");
+  // Per explicit request ("voice call automatically sorts to the top of
+  // the assignment list until other sort orders are chosen"): tracks
+  // whether the agent has EVER actually touched the sort control
+  // (`AssignmentsSortButton`'s own field or direction pick) — distinct
+  // from `assignmentSort`/`assignmentSortDirection` themselves, since
+  // those already default to real values (`"lastUpdated"`/`"desc"`) with
+  // no "nothing chosen yet" state of their own to read instead. While
+  // `false`, the render loop below layers an extra "live voice calls
+  // first" partition on top of whatever `sortAssignments` already
+  // produces (see that call site's own doc comment); the FIRST explicit
+  // pick from either control flips this `true` and drops that partition
+  // for good, respecting the agent's now-explicit preference exactly —
+  // including re-picking today's own default field/direction, which still
+  // counts as a real, deliberate choice.
+  const [assignmentSortManuallySet, setAssignmentSortManuallySet] = useState(false);
   // Drives `AssignmentsExpandCollapseAllButton` — see that component's own
   // doc comment for why this is a one-shot "which direction does the NEXT
   // click bulk-apply" toggle (`channelsAllExpanded`) plus a version nonce
@@ -2115,7 +2281,11 @@ export function AgentWorkspace2WithDeskPage({
     }
   }, [channelsExpandedById, interactions, channelsAllExpanded]);
   const [activeInteractionId, setActiveInteractionId] = useState<string | null>(
-    () => initialInteraction?.id ?? null
+    // Defaults to the seeded conference call (see `TEST_SEED_INTERACTIONS`'s
+    // own doc comment) so a tester lands directly on the most distinctive
+    // new work instead of the plain Home dashboard — only while that seed
+    // is actually active and `initialInteraction` hasn't already won.
+    () => initialInteraction?.id ?? (SEED_TEST_INTERACTIONS ? TEST_SEED_CONFERENCE_CALL.id : null)
   );
   // Customers table's "+ Filter" state, lifted up here (not local to
   // `CustomersListView`) — that component sits inside the Desk dashboard's
@@ -4163,6 +4333,32 @@ export function AgentWorkspace2WithDeskPage({
         open: sidePanelOpen,
         fullScreen: sidePanelFullScreen,
       });
+    }
+    // Stamps/clears `Thread.backgroundedSinceTick` (its own doc comment,
+    // agent-next-gen-interaction-dashboard.tsx) — per explicit follow-up
+    // request ("for 'on hold' states, always show a timer... even when
+    // not selected"): the OUTGOING interaction's own live voice thread (if
+    // any) gets stamped with `clockTick` right as it stops being active —
+    // the exact moment its own "on hold" clock should start counting from
+    // — and the INCOMING one's own live thread (if any) gets that stamp
+    // cleared back out, so re-selecting it later starts a fresh count
+    // instead of resuming/accumulating from a stale earlier moment.
+    if (outgoingId !== nextId) {
+      setInteractions((prev) =>
+        prev.map((i) => {
+          if (i.id === outgoingId) {
+            const thread = findLiveVoiceThread(i);
+            if (!thread) return i;
+            return { ...i, threads: i.threads.map((t) => (t === thread ? { ...t, backgroundedSinceTick: clockTick } : t)) };
+          }
+          if (i.id === nextId) {
+            const thread = findLiveVoiceThread(i);
+            if (!thread || thread.backgroundedSinceTick === undefined) return i;
+            return { ...i, threads: i.threads.map((t) => (t === thread ? { ...t, backgroundedSinceTick: undefined } : t)) };
+          }
+          return i;
+        })
+      );
     }
     setActiveInteractionId(nextId);
     if (nextId && nextId !== outgoingId) {
@@ -6489,6 +6685,13 @@ export function AgentWorkspace2WithDeskPage({
   // re-armed by `emailFocusPending`/`addToast` changing identity on every
   // unrelated re-render.
   useEffect(() => {
+    // Per explicit request ("hide the Sofia Sullivan toast that
+    // automatically appears for this testing scenario") — the live
+    // customer-test build shouldn't surface a canned, unrequested toast 20s
+    // into the session. "Hide, don't destroy" (CLAUDE.md rule #19's
+    // established pattern): the simulated-reply feature itself is
+    // untouched below, just gated off.
+    if (!SHOW_SIMULATED_EMAIL_REPLY_TOAST) return;
     const timer = window.setTimeout(() => {
       // Deliberately NOT done inside a `setEmailFocusPending` updater
       // function — React 18 StrictMode double-invokes an updater function
@@ -7318,26 +7521,18 @@ export function AgentWorkspace2WithDeskPage({
   // `scroll-chevron.tsx` (lyra-ui) was extracted to avoid in the first
   // place.
   //
-  // `effectiveVoiceControlsPosition` — per explicit "Change of direction"
-  // follow-up ("when [the left rail] collapses the controls are on top of
-  // other information when it persists or floats. Also conferencing UI is
-  // even more complication added to a limited space... when the left rail
-  // is collapsed, and when a conferencing call is created, the controls
-  // and the conferencing UI has to go back to the bottom of the screen.
-  // Forced to go there in those instances"): this FORCES "bottom" whenever
-  // the rail is collapsed OR the displayed call has more than one other
-  // party, regardless of the agent's own STORED `voiceControlsPosition`
-  // preference — a live override, not a change to that preference itself.
-  // `voiceControlsPosition` (and the Settings page's own radio button,
-  // which reads/writes it directly) stays exactly what the agent picked;
-  // only which value actually GATES the two render call sites below
-  // changes. Confirmed via follow-up Q&A: reverts automatically the
-  // instant both conditions clear (this is a plain derived value,
-  // recomputed every render — there's nothing to explicitly revert), and
-  // "a conferencing call" covers BOTH mechanisms that can put more than
-  // one other party on the line — the internal `Thread.colleagues`
-  // conference AND the separate Merge Calls bridge
-  // (`Interaction.mergedInteractionIds`) — not just one of the two.
+  // `effectiveVoiceControlsPosition` — per the original "Change of
+  // direction" follow-up, this used to ALSO force "bottom" whenever the
+  // displayed call had more than one other party (a conference or a
+  // Merge Calls bridge), on top of the rail being collapsed/narrow — per a
+  // later explicit reversal ("if the left rail is open the consult/merge
+  // flow will result in a list appearing with the voice controls in the
+  // left rail... only if the left rail is collapsed will the voice
+  // controls move to the bottom of the screen"), the new card/row-based
+  // consult and conference-roster UI (`agent-next-gen-voice-call-
+  // controls.tsx`'s own `ConsultCard`/roster disclosure) is meant to fit
+  // directly in the open rail, so a conference no longer forces this on
+  // its own. Only the rail's own collapsed/narrow state does now.
   //
   // `!navOpen` alone (not `isNavNarrow`) is the real rail-collapsed
   // signal: `navOpen` is what the rail's own width/icon-only rendering
@@ -7346,16 +7541,33 @@ export function AgentWorkspace2WithDeskPage({
   // (`if (isNavNarrow && navOpen) setNavOpen(false)`) can lag a render
   // behind `isNavNarrow` itself flipping true, and this needs to force
   // "bottom" on that very first narrow render too, not one render late.
-  const hasConference =
-    !!displayedVoiceCallThread?.colleagues?.length ||
-    !!displayedVoiceCallInteraction?.mergedInteractionIds?.length;
   const effectiveVoiceControlsPosition: VoiceControlsPosition =
-    !navOpen || isNavNarrow || hasConference ? "bottom" : voiceControlsPosition;
+    !navOpen || isNavNarrow ? "bottom" : voiceControlsPosition;
+  // Per explicit follow-up request ("voice call automatically sorts to
+  // the top of the assignment list until other sort orders are chosen...
+  // any and all voice calls is what I meant"): layered on TOP of whatever
+  // `sortAssignments` itself produces, not folded into that shared utility
+  // — "has a live voice call" is domain-specific knowledge that function
+  // has no reason to know about (same separation-of-concerns reasoning
+  // `findLiveVoiceThread` itself already exists for). A stable partition
+  // (`Array.prototype.filter` preserves each side's own relative order)
+  // rather than a real second sort key, so every voice call floats above
+  // every non-voice one while still reading top-to-bottom in whatever
+  // order `assignmentSort`/`assignmentSortDirection` already established
+  // among themselves. Only applies while `assignmentSortManuallySet` is
+  // still `false` — its own doc comment covers the "until other sort
+  // orders are chosen" half of this request.
+  const sortedAssignmentsForDisplay = (() => {
+    const sorted = sortAssignments(interactions, assignmentSort, assignmentSortDirection);
+    if (assignmentSortManuallySet) return sorted;
+    const withLiveVoice = sorted.filter((i) => !!findLiveVoiceThread(i));
+    const withoutLiveVoice = sorted.filter((i) => !findLiveVoiceThread(i));
+    return [...withLiveVoice, ...withoutLiveVoice];
+  })();
   const renderVoiceCallControls = (
     extraClassName: string,
     trailingControlsPlain?: boolean,
-    mergeTrailingIntoCluster?: boolean,
-    rosterStacked?: boolean
+    mergeTrailingIntoCluster?: boolean
   ) => {
     if (!displayedVoiceCallInteraction || !displayedVoiceCallThread) return null;
     const interaction = displayedVoiceCallInteraction;
@@ -7364,13 +7576,16 @@ export function AgentWorkspace2WithDeskPage({
       <VoiceCallControls
         trailingControlsPlain={trailingControlsPlain}
         mergeTrailingIntoCluster={mergeTrailingIntoCluster}
-        rosterStacked={rosterStacked}
         // Per explicit request ("change the avatar from user to headset if
         // the voice call is with an agent or skill") — applies regardless
         // of which host is rendering this (bottom bar or left nav), unlike
         // `trailingControlsPlain`/`mergeTrailingIntoCluster` above, which
         // are both scoped to the left nav's own narrow host only.
         isAgentOrSkill={getMergeCandidateKind(interaction) !== "customer"}
+        // Populates the Consult/Transfer popover's own "Select Outbound
+        // Skill" step — the exact same constant this page already uses for
+        // Quick Dial/`AddChannelAdHocButton`, not a fresh list.
+        skillOptions={OUTBOUND_CONFIG.skillOptions}
         // Forces a clean remount (fresh mute/hold/conference/consult
         // state) whenever the UNDERLYING call this bar is showing
         // actually changes — i.e. switching from one live voice call
@@ -7764,14 +7979,35 @@ export function AgentWorkspace2WithDeskPage({
               // its own card any more, so it shouldn't count toward this
               // total either; a plain `interactions.length` read "(2)" for
               // what visibly renders as one combined tile.
-              count={interactions.length - foldedIntoConferenceIds.size}
+              //
+              // Found/fixed while seeding a large test conference (8
+              // participants mostly synthetic — real agents/skills/dialpad
+              // numbers that were never their OWN separate `interactions`
+              // entry to begin with): `foldedIntoConferenceIds.size` on its
+              // own counts EVERY colleague id across every thread, not just
+              // the ones that actually correspond to a real card this page
+              // would otherwise have rendered — so subtracting its raw
+              // `.size` could under-count (silently) or even go negative
+              // ("Assignments (-3)", caught live) the moment a conference's
+              // colleague ids outnumber `interactions` itself. The correct
+              // count is how many of the currently-known `interactions`
+              // are actually being hidden by that same `.has()` check in
+              // the render loop below — i.e. intersect the two, not just
+              // subtract the folded set's raw size.
+              count={interactions.length - interactions.filter((i) => foldedIntoConferenceIds.has(i.id)).length}
               sort={assignmentSort}
-              onSortChange={setAssignmentSort}
+              onSortChange={(v) => {
+                setAssignmentSort(v);
+                setAssignmentSortManuallySet(true);
+              }}
               // Per explicit request — see `PHASE2_ASSIGNMENT_SORT_OPTIONS`'s
               // own doc comment above.
               sortOptions={PHASE2_ASSIGNMENT_SORT_OPTIONS}
               sortDirection={assignmentSortDirection}
-              onSortDirectionChange={setAssignmentSortDirection}
+              onSortDirectionChange={(d) => {
+                setAssignmentSortDirection(d);
+                setAssignmentSortManuallySet(true);
+              }}
               allExpanded={channelsAllExpanded}
               onToggleAllExpanded={handleToggleAllChannelsExpanded}
               // See `AssignmentsSectionCaption`'s own doc comment on
@@ -7949,22 +8185,38 @@ export function AgentWorkspace2WithDeskPage({
                   sits inline like any other rail content instead — pushing
                   the assignment cards below it down, scrolling with them,
                   no separate anchor/measurement machinery needed.
-                  `trailingControlsPlain`/`mergeTrailingIntoCluster`/
-                  `rosterStacked` (2nd–4th args) stay on regardless — the
+                  `trailingControlsPlain`/`mergeTrailingIntoCluster`
+                  (2nd–3rd args) stay on regardless — the
                   rail's own content width here is just as narrow as the
                   old floating card was, so the same compact layout still
                   applies; see each prop's own doc comment
                   (agent-next-gen-voice-call-controls.tsx) for what each
-                  one does. The `rounded-lyra-sm border` + `mb-3` in the
-                  className below is this component's own normal card look
-                  (previously supplied by the now-removed `Draggable`
-                  wrapper's own border/shadow), so it still reads as a
-                  distinct card sitting above the assignment list rather
-                  than bleeding into it. */}
+                  one does. The className below used to ALSO carry its own
+                  `rounded-lyra-sm border ... px-3 py-2` — a second, nested
+                  card border/padding wrapped around `VoiceCallControls`'s
+                  own `cardRef` div, which already has its own identical
+                  border/rounded/padding built in (this component's normal
+                  card look) — removed per explicit follow-up ("even this
+                  div nested inside the larger div I don't want. Just
+                  one"). That still left `VoiceCallControls`'s own OUTER
+                  wrapper div with ITS permanent base `bg-lyra-bg-surface-
+                  base px-6 py-3` (see that div's own doc comment — meant
+                  for the floating/bottom-bar host, where this wrapper
+                  supplies the gutter the card floats within), stacking a
+                  SECOND, invisible-but-real inset on top of `cardRef`'s
+                  own `px-3 py-2` — squeezing the controls narrower than
+                  this rail slot actually has room for. Per a further
+                  explicit follow-up ("spread the controls out into this
+                  div's width... keep the card's border/background, just
+                  trim the padding"): `bg-transparent px-0 py-0` cancels
+                  that outer inset/background here, the same cancellation
+                  the bottom-bar call site below already passes for the
+                  identical reason — leaving `cardRef`'s own border/
+                  background/padding as the only inset, now using this
+                  slot's full width. */}
               {effectiveVoiceControlsPosition === "aboveAssignments" &&
                 renderVoiceCallControls(
-                  "rounded-lyra-sm border border-lyra-border-subtle px-3 py-2 mb-3 animate-in fade-in-0 duration-200",
-                  true,
+                  "bg-transparent px-0 py-0 mb-3 animate-in fade-in-0 duration-200",
                   true,
                   true
                 )}
@@ -8027,10 +8279,12 @@ export function AgentWorkspace2WithDeskPage({
                   type, which opens as its own row instead (see
                   handleStartCall's merge-by-type+address logic). Sorted per
                   `assignmentSort` (`AssignmentsSectionCaption`'s own sort
-                  button) — `interactions` itself stays in insertion order
+                  button), plus the "live voice calls float to top" default
+                  partition (`sortedAssignmentsForDisplay`'s own doc
+                  comment) — `interactions` itself stays in insertion order
                   for everything else that reads it, only this rendering
                   reorders a copy. */}
-              {sortAssignments(interactions, assignmentSort, assignmentSortDirection).map((interaction) => {
+              {sortedAssignmentsForDisplay.map((interaction) => {
                 // Merged-calls combined tile — see `renderedMergeGroupIds`'s
                 // own doc comment above. A later member of an already-
                 // rendered group renders nothing of its own here; the
@@ -8236,11 +8490,26 @@ export function AgentWorkspace2WithDeskPage({
                     // (`OnHoldBadge.tsx`) the card's own header already
                     // shows, rather than leaving `elapsed` (still computed
                     // normally above) visibly ticking underneath it.
+                    //
+                    // Per explicit follow-up request ("for 'on hold'
+                    // states, always show a timer... even when not
+                    // selected"): the explicit agent-pressed hold
+                    // (`heldByAgent`/`heldSinceTick`) is checked FIRST, but
+                    // falls through to the implicit "navigated away"
+                    // timer (`backgroundedSinceTick`, that field's own doc
+                    // comment) whenever this row is on hold for THAT
+                    // reason instead — between the two, `channelOnHold`
+                    // being true at all guarantees one of them is set, so
+                    // this pill now always shows a real duration, never
+                    // the bare "On Hold" text this used to fall back to
+                    // for the implicit case.
                     elapsedOverride: channelOnHold ? (
                       <OnHoldPill
                         elapsedLabel={
                           c.heldByAgent && c.heldSinceTick !== undefined
                             ? formatElapsedTime(clockTick - c.heldSinceTick)
+                            : c.backgroundedSinceTick !== undefined
+                            ? formatElapsedTime(clockTick - c.backgroundedSinceTick)
                             : undefined
                         }
                       />
@@ -8287,27 +8556,42 @@ export function AgentWorkspace2WithDeskPage({
                     // `removeVariant` default). See `InteractionChannel.
                     // removeVariant`'s own doc comment, channel-row.tsx.
                     removeVariant: isNewOutboundThread ? "delete-draft" : "close",
-                    // Per explicit request ("add an end call solid red icon
-                    // to the right of the outcome check buttons in active
-                    // call interactionNavitems") — same wiring as
-                    // AgentNextGenPage.tsx's own `channels` builder (see its
-                    // doc comment there for the full reasoning): live (not
-                    // closed, not yet hung up) voice channel only, including
-                    // while it's on hold, reusing the exact `voiceCallEnded`
-                    // flag/state update the record-header's own "End Call"
-                    // button sets below (`onHangUp`).
-                    onEndCall:
-                      c.type === "voice" && !interaction.closed && !interaction.voiceCallEnded
-                        ? () => {
-                            setInteractions((prev) =>
-                              prev.map((i) =>
-                                i.id === interaction.id ? { ...i, voiceCallEnded: true } : i
-                              )
-                            );
-                            if (interaction.id === activeInteractionId) {
-                              setVoiceVideoWindowOpen(false);
-                              setVoiceVideoFullScreen(false);
+                    // The standalone solid-red "End Call" icon this row used
+                    // to show (next to Outcome) is gone outright — per
+                    // explicit follow-up request ("remove the end call icon
+                    // in the assignment tile"). Omitting `onEndCall` entirely
+                    // is all that's needed (its own doc comment,
+                    // channel-row.tsx: "Omit... to leave this row exactly as
+                    // before — no button, no space reserved for it") — the
+                    // main voice-controls bar's own End Call button (with
+                    // its new Leave/End-for-everyone choice) is still the
+                    // way to end a call — this row no longer has its own
+                    // one-click shortcut for it.
+                    // Per explicit follow-up request/screenshot ("add the
+                    // consult/transfer popup to the assignment tile
+                    // dropdown" — this page specifically, not Advanced/
+                    // Phase 1, which already has this): voice-only, mirrors
+                    // Advanced's identical fix exactly. `showConsultTransfer:
+                    // false` moves "Consult / Transfer" out of its own
+                    // standalone icon (left of Outcome) and into this row's
+                    // kebab dropdown instead (`ChannelRow`'s own
+                    // `keepConsultTransfer`), and `onConsultTransferClick`
+                    // is what actually wires that dropdown row up — same
+                    // `consultAnchorRef`/`setConferenceOpen` pair the
+                    // record-header `ChannelToggle` kebab drives elsewhere
+                    // on this page, one shared popover, multiple entry
+                    // points. This row's own interaction isn't necessarily
+                    // the one currently displayed, so it switches to it
+                    // FIRST.
+                    showConsultTransfer: c.type === "voice" ? false : undefined,
+                    onConsultTransferClick:
+                      c.type === "voice"
+                        ? (anchorEl: HTMLElement) => {
+                            if (activeInteractionId !== interaction.id) {
+                              switchActiveInteraction(interaction.id);
                             }
+                            consultAnchorRef.current = anchorEl;
+                            setConferenceOpen(true);
                           }
                         : undefined,
                     // "Merge Calls" — bridges this (voice, still live)
@@ -8530,15 +8814,21 @@ export function AgentWorkspace2WithDeskPage({
                     // (see that function's own doc comment) — rather than
                     // `interaction.customerName` directly.
                     customerName={interactionDisplayName(interaction)}
-                    // Every merged conference colleague's name — see
-                    // `InteractionNavItemProps.additionalParticipants`'s own
-                    // doc comment (interaction-nav-item.tsx) for why these
-                    // are a separate prop rather than folded into
-                    // `customerName` above. Combines in-call Consult/Merge
-                    // colleagues AND any agent/skill merged in via "Merge
-                    // Calls" (`cardMergedAgentSkillNames`, above) — both
-                    // read as the exact same "conference" concept here.
-                    additionalParticipants={[...cardConferenceColleagues.map((c) => c.name), ...cardMergedAgentSkillNames]}
+                    // `additionalParticipants` (the per-colleague name list
+                    // this card used to render as extra subtitle lines) —
+                    // removed per explicit follow-up request ("the list of
+                    // names inside of the assignment tile is now not
+                    // necessary. The list can be removed"): with a real
+                    // 8-person test conference, that list made the tile
+                    // visibly taller than every other card for no real
+                    // benefit the roster disclosure in the voice-controls
+                    // bar itself doesn't already cover better. The purple
+                    // "Conference" icon badge (`isConferenceCall`,
+                    // `cardIsConferenceCall` below) still signals this is a
+                    // multi-party call — `cardConferenceColleagues`/
+                    // `cardMergedAgentSkillNames` are left in place (still
+                    // feed that derivation), just no longer also spelled out
+                    // here as a name-per-line list.
                     // `adhoc:`-prefixed ids are lyra-ui's own "Continue
                     // with" ad-hoc flow (`buildAdHocSearchContact`, create-
                     // new.tsx); `quickdial:`-prefixed ids are the Dial Pad's
@@ -8826,6 +9116,15 @@ export function AgentWorkspace2WithDeskPage({
                         setVoiceControlsPosition(next);
                       }}
                     />
+                    <div className="mt-4">
+                      <DashboardViewSetting
+                        value={dashboardView}
+                        onValueChange={(next) => {
+                          setDashboardViewState(next);
+                          setDashboardView(next);
+                        }}
+                      />
+                    </div>
                   </div>
                 </div>
               ) : showAllContacts && !activeInteraction ? (
@@ -9500,6 +9799,33 @@ export function AgentWorkspace2WithDeskPage({
                                       activeInteraction.threadStatuses?.[c.id] !== "Closed" &&
                                       !isNewOutboundThread
                                     }
+                                    // Per explicit follow-up request/
+                                    // screenshot ("remove the ellipses from
+                                    // the channel type div"): voice-only —
+                                    // every action this kebab held (Consult/
+                                    // Transfer, Send/Download Transcript,
+                                    // Translate Messages, Merge Calls) is
+                                    // already reachable from the assignment
+                                    // tile's own kebab now that
+                                    // `showConsultTransfer`/
+                                    // `onConsultTransferClick` (above, this
+                                    // page's own `channels` builder) moved
+                                    // Consult/Transfer there too — this pill
+                                    // no longer needs a second copy of its
+                                    // own. "Listen to Recording"/"Download
+                                    // Recording" (voice-only items that ONLY
+                                    // ever lived in this one kebab,
+                                    // deliberately kept out of the
+                                    // assignment tile's own menu when Merge
+                                    // Calls was added) are dropped outright,
+                                    // per explicit confirmation — both are
+                                    // decorative placeholders with no real
+                                    // audio behind them in this prototype,
+                                    // so losing their only access point
+                                    // costs nothing real. Every non-voice
+                                    // channel type keeps its kebab here
+                                    // exactly as before.
+                                    showKebab={c.type !== "voice"}
                                     removeVariant={isNewOutboundThread ? "delete-draft" : "close"}
                                     outcome={{
                                       open: outcomeDraftKey === outcomeKey && outcomeDraftSource === "tab",
@@ -10480,7 +10806,7 @@ export function AgentWorkspace2WithDeskPage({
                         it depended on are left in place rather than deleted. */}
 
                     <div className="mt-6">
-                      {SHOW_CONTACT_HISTORY_CARD ? (
+                      {dashboardView === "contactHistory" ? (
                         <ContactHistoryCard
                           onSelectEntry={(entry) => {
                             // Clicking the row that's ALREADY selected closes
@@ -10506,6 +10832,7 @@ export function AgentWorkspace2WithDeskPage({
                           selectedEntryId={selectedContactHistoryEntry?.id ?? null}
                           historyByRange={contactHistoryByRange}
                           onOpenAllContacts={handleOpenAllContacts}
+                          allContactsButtonLabel="Search App"
                         />
                       ) : (
                         <EmailFocusCard
@@ -10535,7 +10862,11 @@ export function AgentWorkspace2WithDeskPage({
                           // Same handler `ContactHistoryCard` above already
                           // wires to its own "All Contacts" button — one
                           // shared destination regardless of which card is
-                          // currently showing in this slot.
+                          // currently showing in this slot. No
+                          // `allContactsButtonLabel` here — `EmailFocusCard`
+                          // has no such prop; its own button already
+                          // hardcodes "Search App" directly (see that
+                          // component's own doc comment).
                           onOpenAllContacts={handleOpenAllContacts}
                         />
                       )}
@@ -10576,7 +10907,7 @@ export function AgentWorkspace2WithDeskPage({
                     // ContactHistoryEntry`, just a different card; the two
                     // are never actually set at once in practice since only
                     // one of `ContactHistoryCard`/`EmailFocusCard` renders
-                    // at a time, see `SHOW_CONTACT_HISTORY_CARD`, but the
+                    // at a time, see `dashboardView`, but the
                     // priority order still has to agree everywhere below),
                     // which in turn takes priority over the plain
                     // `interiorPanelOpen` "Case Details" default — same
