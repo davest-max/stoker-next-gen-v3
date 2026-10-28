@@ -14,7 +14,9 @@
 export type DashboardView = "myEmails" | "contactHistory";
 
 const STORAGE_KEY = "agent-next-gen:dashboard-view:v1";
-const DEFAULT_VIEW: DashboardView = "myEmails";
+// Was "myEmails" — switched to "contactHistory" per explicit request ("set
+// the default dashboard setting to Contact History").
+const DEFAULT_VIEW: DashboardView = "contactHistory";
 
 let cache: DashboardView | null = null;
 

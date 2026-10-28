@@ -7503,21 +7503,22 @@ export function AgentWorkspace2WithDeskPage({
   ) : null;
 
   // Renders the SAME `<VoiceCallControls>` element regardless of which of
-  // the two host locations this app now supports it's rendering into (the
-  // bottom bar, or the left nav above the assignment list — see
+  // the three host locations this app now supports it's rendering into (the
+  // bottom bar, the left nav above the assignment list, or embedded inside
+  // the active call's own assignment tile in that same list — see
   // `voiceControlsPosition`'s own doc comment, near `showSettings`, for the
   // full "why"). A parameterized FUNCTION — not a single pre-computed
-  // element reused in two spots — specifically so it's only ever invoked
-  // (and so only ever mounts) from whichever ONE call site is actually
-  // gated on by the current `voiceControlsPosition`; the other call site's
-  // own condition short-circuits before this is ever called, so exactly
-  // one real `VoiceCallControls` instance exists for a given call,
+  // element reused across call sites — specifically so it's only ever
+  // invoked (and so only ever mounts) from whichever ONE call site is
+  // actually gated on by the current `voiceControlsPosition`; every other
+  // call site's own condition short-circuits before this is ever called, so
+  // exactly one real `VoiceCallControls` instance exists for a given call,
   // regardless of which position is chosen. `extraClassName` is the one
-  // thing that genuinely differs between the two hosts (the bottom bar's
-  // own slide-up entrance vs. the left nav's plain fade-in) — every other
-  // prop is identical no matter where this ends up rendering, so
-  // duplicating this whole block at both call sites would just be the same
-  // "two copies, one gets fixed and the other doesn't" risk this app's own
+  // thing that genuinely differs between hosts (the bottom bar's own
+  // slide-up entrance vs. the left nav's plain fade-in) — every other prop
+  // is identical no matter where this ends up rendering, so duplicating
+  // this whole block at every call site would just be the same "copies,
+  // one gets fixed and the others don't" risk this app's own
   // `scroll-chevron.tsx` (lyra-ui) was extracted to avoid in the first
   // place.
   //
@@ -7567,7 +7568,8 @@ export function AgentWorkspace2WithDeskPage({
   const renderVoiceCallControls = (
     extraClassName: string,
     trailingControlsPlain?: boolean,
-    mergeTrailingIntoCluster?: boolean
+    mergeTrailingIntoCluster?: boolean,
+    embedded?: boolean
   ) => {
     if (!displayedVoiceCallInteraction || !displayedVoiceCallThread) return null;
     const interaction = displayedVoiceCallInteraction;
@@ -7576,6 +7578,7 @@ export function AgentWorkspace2WithDeskPage({
       <VoiceCallControls
         trailingControlsPlain={trailingControlsPlain}
         mergeTrailingIntoCluster={mergeTrailingIntoCluster}
+        embedded={embedded}
         // Per explicit request ("change the avatar from user to headset if
         // the voice call is with an agent or skill") — applies regardless
         // of which host is rendering this (bottom bar or left nav), unlike
@@ -8763,6 +8766,16 @@ export function AgentWorkspace2WithDeskPage({
                   .filter((i): i is Interaction => !!i && getMergeCandidateKind(i) !== "customer")
                   .map((i) => i.customerName ?? "Unknown");
                 const cardIsConferenceCall = cardConferenceColleagues.length > 0 || cardMergedAgentSkillNames.length > 0;
+                // Whether THIS card is the one voice-call-controls bar
+                // embeds into, for the "Within the assignment tile"
+                // `VoiceControlsPosition` — see that render block's own doc
+                // comment, below, for the full "why". Computed once here so
+                // both the tile's own `className` override (flattening its
+                // bottom edge to continue into the embedded bar below it)
+                // and that render block itself read the identical condition.
+                const isWithinTileHost =
+                  effectiveVoiceControlsPosition === "withinTile" &&
+                  interaction.id === displayedVoiceCallInteraction?.id;
                 return (
                   <div
                     key={interaction.id}
@@ -8784,6 +8797,29 @@ export function AgentWorkspace2WithDeskPage({
                     }}
                   >
                   <InteractionNavCard
+                    // Flattens this card's own bottom edge/corners (see
+                    // `isWithinTileHost`'s own doc comment, above) so the
+                    // embedded voice-call-controls bar below continues it
+                    // seamlessly instead of reading as a second, disconnected
+                    // box underneath. `mb-0` cancels `InteractionNavItem`'s
+                    // own `mb-2` (interaction-nav-item.tsx — ordinary
+                    // breathing room between separate cards) — per explicit
+                    // follow-up report ("avoid the space between the voice
+                    // controls and the main assignment tile"), that gap is
+                    // exactly what was leaving a visible seam between this
+                    // card and the bar below it, even with both their
+                    // touching borders already flattened. `shadow-none`
+                    // cancels `InteractionNavItem`'s own `active && "shadow-
+                    // md"` — per explicit follow-up feedback ("look at the
+                    // shadow... in my view the shadow in this instance isn't
+                    // working"): that shadow only ever wrapped the tile's
+                    // own (now-flattened) bottom edge, not the embedded bar
+                    // below it, so an active card's elevation visibly cut
+                    // off mid-card instead of wrapping the whole combined
+                    // shape. The active blue left border already signals
+                    // "this is the selected card" without needing elevation
+                    // too.
+                    className={isWithinTileHost ? "rounded-b-none border-b-0 mb-0 shadow-none" : undefined}
                     currentChannelType={currentChannelType}
                     showChannelBadge={channels.length <= 1}
                     // Same `cardAwaitingWaitSeconds`/`getAwaitingSeverity`
@@ -9005,6 +9041,66 @@ export function AgentWorkspace2WithDeskPage({
                     currentChannelKey={currentId}
                     onCurrentChannelChange={(key) => handleChannelSelect(interaction.id, key)}
                   />
+                  {/* Voice call controls — THIRD of the three host locations
+                      `voiceControlsPosition` can pick (see that state's own
+                      doc comment), per explicit follow-up request ("a third
+                      choice to have the voice controls appear within the
+                      assignment tile itself"). Only renders on THIS specific
+                      card — the one `displayedVoiceCallInteraction` is
+                      currently showing — never on every card with a live
+                      call, same "exactly one instance" rule the other two
+                      hosts already follow (`renderVoiceCallControls`'s own
+                      doc comment). Wrapped in a footer `div` carrying the
+                      side/bottom border+radius the tile's own (now-
+                      flattened, see `isWithinTileHost`'s className above)
+                      bottom edge no longer does, continuing its background
+                      and border color — `border-lyra-border-active` to
+                      match the tile's own active-card border exactly when
+                      this card is ALSO the one currently selected, the same
+                      plain `border-lyra-border-subtle` every inactive card
+                      uses otherwise (this bar can be showing for a call the
+                      agent has merely navigated away from — see
+                      `displayedVoiceCallInteraction`'s own doc comment —
+                      without that card being the one actually selected).
+                      `embedded` (on `VoiceCallControls` itself) drops ITS
+                      OWN border/background in favor of just a top divider —
+                      see that prop's own doc comment, agent-next-gen-voice-
+                      call-controls.tsx. Forced to "bottom" instead whenever
+                      the rail is collapsed/narrow, same as "Above the
+                      assignment list" — see `effectiveVoiceControlsPosition`'s
+                      own doc comment. */}
+                  {isWithinTileHost && (
+                    <div
+                      className={cn(
+                        // `mb-2` — carries the breathing room the tile's own
+                        // (now-cancelled, see `isWithinTileHost`'s className
+                        // above) margin used to provide, now that THIS
+                        // footer is the combined card's actual bottom edge.
+                        // `border-r`/`border-b` stay a plain 1px — only the
+                        // LEFT edge's width varies, matching the tile's own
+                        // `active ? "border-l-4" : "border-l"` exactly (see
+                        // `expandedCardClassName`, interaction-nav-item.tsx)
+                        // per explicit follow-up request ("match the left
+                        // border size to the assignment tile. The intent is
+                        // to unify them visually even more") — the footer
+                        // used to always render a plain 1px left edge here
+                        // regardless of this card's own active state, a
+                        // visible width mismatch right where the two pieces
+                        // meet.
+                        "rounded-b-lyra-sm border-r border-b bg-lyra-bg-surface-base mb-2",
+                        interaction.id === activeInteractionId
+                          ? "border-l-4 border-lyra-border-active"
+                          : "border-l border-lyra-border-subtle"
+                      )}
+                    >
+                      {renderVoiceCallControls(
+                        "bg-transparent px-0 py-0 pt-2 animate-in fade-in-0 duration-200",
+                        true,
+                        true,
+                        true
+                      )}
+                    </div>
+                  )}
                   </div>
                 );
               })}

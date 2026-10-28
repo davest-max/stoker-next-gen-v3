@@ -6745,7 +6745,8 @@ export function AgentWorkspaceAdvancedPage({
   const renderVoiceCallControls = (
     extraClassName: string,
     trailingControlsPlain?: boolean,
-    mergeTrailingIntoCluster?: boolean
+    mergeTrailingIntoCluster?: boolean,
+    embedded?: boolean
   ) => {
     if (
       !displayedVoiceCallInteraction ||
@@ -6762,6 +6763,7 @@ export function AgentWorkspaceAdvancedPage({
         callInstanceId={`${interaction.id}:${thread.id}`}
         className={extraClassName}
         trailingControlsPlain={trailingControlsPlain}
+        embedded={embedded}
         mergeTrailingIntoCluster={mergeTrailingIntoCluster}
         // Per explicit request ("change the avatar from user to headset if
         // the voice call is with an agent or skill") — applies regardless
@@ -8004,6 +8006,11 @@ export function AgentWorkspaceAdvancedPage({
                   .filter((i): i is Interaction => !!i && getMergeCandidateKind(i) !== "customer")
                   .map((i) => i.customerName ?? "Unknown");
                 const cardIsConferenceCall = cardConferenceColleagues.length > 0 || cardMergedAgentSkillNames.length > 0;
+                // See the identical derivation's own doc comment in
+                // AgentWorkspace2WithDeskPage.tsx.
+                const isWithinTileHost =
+                  effectiveVoiceControlsPosition === "withinTile" &&
+                  interaction.id === displayedVoiceCallInteraction?.id;
                 return (
                   <div
                     key={interaction.id}
@@ -8020,6 +8027,9 @@ export function AgentWorkspaceAdvancedPage({
                     }}
                   >
                   <InteractionNavCard
+                    // See the identical derivation's own doc comment in
+                    // AgentWorkspace2WithDeskPage.tsx.
+                    className={isWithinTileHost ? "rounded-b-none border-b-0 mb-0 shadow-none" : undefined}
                     currentChannelType={currentChannelType}
                     showChannelBadge={channels.length <= 1}
                     // Same `cardAwaitingWaitSeconds`/`getAwaitingSeverity`
@@ -8152,6 +8162,29 @@ export function AgentWorkspaceAdvancedPage({
                     currentChannelKey={currentId}
                     onCurrentChannelChange={(key) => handleChannelSelect(interaction.id, key)}
                   />
+                  {/* Voice call controls — "Within the assignment tile" host.
+                      See the identical block's own doc comment in
+                      AgentWorkspace2WithDeskPage.tsx for the full "why". */}
+                  {isWithinTileHost && (
+                    <div
+                      className={cn(
+                        // `mb-2`/left-border-width split — see the identical
+                        // derivation's own doc comment in
+                        // AgentWorkspace2WithDeskPage.tsx.
+                        "rounded-b-lyra-sm border-r border-b bg-lyra-bg-surface-base mb-2",
+                        interaction.id === activeInteractionId
+                          ? "border-l-4 border-lyra-border-active"
+                          : "border-l border-lyra-border-subtle"
+                      )}
+                    >
+                      {renderVoiceCallControls(
+                        "bg-transparent px-0 py-0 pt-2 animate-in fade-in-0 duration-200",
+                        true,
+                        true,
+                        true
+                      )}
+                    </div>
+                  )}
                   </div>
                 );
               })}

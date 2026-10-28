@@ -151,7 +151,7 @@ import {
   Split,
   Merge,
 } from "lucide-react";
-import { formatElapsedTime, initialsFor } from "@/components/agent-next-gen-shared-utils";
+import { formatElapsedTime, initialsFor, CURRENT_AGENT_NAME } from "@/components/agent-next-gen-shared-utils";
 import { TransferIcon } from "@/components/agent-next-gen-transcript";
 
 /** One column: icon on top, visible label underneath — the main control
@@ -1129,7 +1129,16 @@ function ParticipantRow({
       aria-hidden="true"
       {...(onSelect ? { onClick: onSelect } : {})}
     >
-      {isSelf ? "You" : isInternalAgent ? <Headset className="h-3.5 w-3.5" strokeWidth={1.5} /> : initialsFor(label)}
+      {isSelf
+        ? // Per explicit request ("set the 'You' avatar circle to the
+          // agent's initials, in this case JS") — the row's own visible
+          // label stays "You" (`label="You"` at this row's call site), only
+          // the avatar glyph changes, same `initialsFor` every other plain
+          // (non-agent/skill) participant's avatar already uses.
+          initialsFor(CURRENT_AGENT_NAME)
+        : isInternalAgent
+          ? <Headset className="h-3.5 w-3.5" strokeWidth={1.5} />
+          : initialsFor(label)}
     </span>
   );
   // Per explicit follow-up request ("name and controls for each participant
@@ -1558,6 +1567,24 @@ export interface VoiceCallControlsProps {
    *  call site omits this — its centered-decorative/anchored-right-dark
    *  two-cluster layout (this file's own top doc comment) is unaffected. */
   mergeTrailingIntoCluster?: boolean;
+  /** Drops this card's own border/rounded corners/background, replacing
+   *  them with just a top hairline divider — for the "Within the
+   *  assignment tile" `VoiceControlsPosition` (agent-next-gen-voice-
+   *  controls-position.ts), where this bar renders as the TAIL END of an
+   *  `InteractionNavItem`'s own already-bordered/backgrounded card
+   *  (`AgentWorkspace2WithDeskPage.tsx`'s own call site, inside its
+   *  `sortedAssignmentsForDisplay.map`), not as its own separate floating/
+   *  pinned card the way the bottom bar and "Above the assignment list"
+   *  hosts both still are. Without this, the bar's own `cardRef` border/
+   *  background would stack a second, visually disconnected box directly
+   *  underneath the tile's own — the exact "two containers" nested-border
+   *  bug this file's own `className`/`extraClassName` doc comments
+   *  elsewhere already describe fixing for the OTHER two hosts, just one
+   *  layer deeper here since there's no `className` override that reaches
+   *  `cardRef` itself. Omit (or `false`) to keep this card's normal
+   *  border/background/rounded corners exactly as before — every existing
+   *  caller is unaffected. */
+  embedded?: boolean;
 }
 
 // Module-level (NOT component state) — survives this bar's own remounts on
@@ -1605,6 +1632,7 @@ export function VoiceCallControls({
   className,
   trailingControlsPlain,
   mergeTrailingIntoCluster,
+  embedded,
 }: VoiceCallControlsProps) {
   // Decorative-only fallback for a caller that hasn't wired `onHoldChange`
   // through yet — see that prop's own doc comment (same `localVideoAdded`/
@@ -2586,7 +2614,14 @@ export function VoiceCallControls({
           // gray container (`#fbfcfe` light / `#262626` dark) rather than
           // the lighter, "stands out" white/near-white treatment
           // `surface-overlay` gave it.
-          "border border-lyra-border-subtle bg-lyra-bg-surface-container-subtle",
+          // `embedded` (`VoiceCallControlsProps.embedded`'s own doc comment)
+          // swaps this card's own border+background for just a plain top
+          // divider — the host (an `InteractionNavItem`'s own card) already
+          // supplies the real border/background this bar would otherwise
+          // double up on.
+          embedded
+            ? "border-t border-lyra-border-subtle"
+            : "border border-lyra-border-subtle bg-lyra-bg-surface-container-subtle",
           // `px-3 py-2` (was `px-2 py-1`) — per later explicit follow-up
           // request/reference screenshot ("make the voice controls
           // larger"): a little more breathing room around the now-taller
@@ -2612,7 +2647,8 @@ export function VoiceCallControls({
           // never really space left for `justify-between` to distribute in
           // the first place; keeping it around risked extra, unwanted
           // inter-row spacing once this row actually wraps.
-          "w-full flex flex-wrap items-center gap-2 rounded-lg px-3 py-2"
+          "w-full flex flex-wrap items-center gap-2 px-3 py-2",
+          !embedded && "rounded-lg"
         )}
       >
         {/* Three real flex slots now (timer / main buttons+volume / dark
@@ -2663,8 +2699,21 @@ export function VoiceCallControls({
               file's own top doc comment); the fallback glyph is explicitly
               `text-white` per a follow-up clarification ("keep it white
               though not black") rather than this design system's default
-              (dark) icon color. */}
-          {customerLabel && (
+              (dark) icon color.
+
+              Also gated on `!embedded` — per explicit follow-up request
+              ("no need to have the customer name appear twice, the second
+              instance can be hidden along with the second avatar circle"):
+              the "Within the assignment tile" host (`VoiceCallControlsProps
+              .embedded`'s own doc comment) already sits directly under an
+              `InteractionNavItem` card showing this SAME customer's own
+              name and avatar — this bar's own copy of both is pure
+              duplication there, not genuinely new information the way it
+              is on the other two hosts (which don't already have a card
+              showing that identity right above them). Timer/hold-timer and
+              the Conference tag (below) are untouched — those aren't
+              shown anywhere else on this specific card. */}
+          {customerLabel && !embedded && (
             <div
               aria-hidden="true"
               // Per a later explicit follow-up request ("update the purple
@@ -2692,7 +2741,7 @@ export function VoiceCallControls({
             </div>
           )}
           <div className="flex min-w-0 flex-col justify-center">
-            {customerLabel && (
+            {customerLabel && !embedded && (
               <span className="flex min-w-0 items-center gap-1.5">
                 <span className="lyra-body-sm truncate text-lyra-fg-primary">{customerLabel}</span>
                 {/* Conference/Merged tags — rendered inline with the name

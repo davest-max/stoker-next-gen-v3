@@ -2,12 +2,16 @@
 // choose whether the voice-call-controls bar (Hold/Mute/Mask/Record/
 // Keypad/Consult/Transcript/Volume/Add video/End Call, plus the customer
 // identity/roster strip above them) docks at the bottom of the interaction
-// content column (the long-standing default) or renders compactly above
-// the left nav's own assignment list instead — per explicit request: "a
+// content column (the long-standing default), renders compactly above the
+// left nav's own assignment list instead, or embeds directly inside the
+// active call's own assignment tile in that list — per explicit request: "a
 // user can define whether the voice controls appear at the bottom of the
 // screen as it is now, or choose to have them appear above the assignment
-// cards." A `RadioButtonGroup` (not a `Switch`) per that same request's own
-// framing — this is a choice between two positions, not an on/off toggle.
+// cards," later extended with a third choice ("add another settings choice
+// for where voice controls appear: a third choice to have the voice
+// controls appear within the assignment tile itself"). A `RadioButtonGroup`
+// (not a `Switch`) per the original request's own framing — this is a
+// choice between positions, not an on/off toggle.
 //
 // Shared by both `AgentWorkspace2WithDeskPage.tsx` and
 // `AgentWorkspaceAdvancedPage.tsx` — their Settings page bodies were
@@ -36,6 +40,7 @@ import type { VoiceControlsPosition } from "@/components/agent-next-gen-voice-co
 const VOICE_CONTROLS_POSITION_OPTIONS: { value: VoiceControlsPosition; label: string }[] = [
   { value: "bottom", label: "Bottom of the screen" },
   { value: "aboveAssignments", label: "Above the assignment list" },
+  { value: "withinTile", label: "Within the assignment tile" },
 ];
 
 export function VoiceControlsPositionSetting({

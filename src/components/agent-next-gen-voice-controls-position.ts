@@ -1,10 +1,12 @@
 // Persisted user preference: where the voice-call-controls bar renders —
 // `"bottom"` (the long-standing default, docked at the bottom of the
-// interaction content column) or `"aboveAssignments"` (a second, compact
+// interaction content column), `"aboveAssignments"` (a second, compact
 // icon-only instance pinned above the left nav's own assignment list
-// instead — see the Settings page's "Voice Controls Position" control,
+// instead), or `"withinTile"` (embedded inside the active call's own
+// assignment tile in that same list, as the tail end of that one card —
+// see the Settings page's "Voice Controls Position" control,
 // agent-next-gen-voice-controls-position-setting.tsx). Exactly one of the
-// two ever renders for a given call (see each page's own `VoiceCallControls`
+// three ever renders for a given call (see each page's own `VoiceCallControls`
 // call sites) — this is a relocation, not a duplication.
 //
 // Follows this app's existing module-level-cache `localStorage` pattern
@@ -16,7 +18,7 @@
 // versioned-key convention, so a future breaking change to this value's
 // shape can bump the key and start fresh instead of migrating/guessing at
 // old data.
-export type VoiceControlsPosition = "bottom" | "aboveAssignments";
+export type VoiceControlsPosition = "bottom" | "aboveAssignments" | "withinTile";
 
 const STORAGE_KEY = "agent-next-gen:voice-controls-position:v1";
 const DEFAULT_POSITION: VoiceControlsPosition = "bottom";
@@ -27,7 +29,8 @@ export function getVoiceControlsPosition(): VoiceControlsPosition {
   if (cache) return cache;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    cache = raw === "bottom" || raw === "aboveAssignments" ? raw : DEFAULT_POSITION;
+    cache =
+      raw === "bottom" || raw === "aboveAssignments" || raw === "withinTile" ? raw : DEFAULT_POSITION;
   } catch {
     // Storage disabled/unavailable — fall back to the default for this
     // session; every read still goes through this same function, so the
