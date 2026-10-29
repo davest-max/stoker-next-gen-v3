@@ -59,6 +59,7 @@ import {
   Tooltip,
   Checkbox,
   Accordion,
+  Tag,
   type SelectOption,
   type SortDirection,
   type CreateNewOutboundConfig,
@@ -299,6 +300,7 @@ import {
   Inbox,
   Check,
   Mail,
+  PhoneOff,
   type LucideIcon,
 } from "lucide-react";
 
@@ -7685,6 +7687,21 @@ export function AgentWorkspace2WithDeskPage({
           );
           setVoiceVideoWindowOpen(false);
           setVoiceVideoFullScreen(false);
+          // Per explicit request ("need to have a tester on usertesting
+          // see the result. Consider a toast notification also"): on top
+          // of the new "Call Ended" pill next to the customer name
+          // (`PageHeader`'s own `titleSuffix`, this record header's own
+          // call site below), a toast gives the end-of-call moment a
+          // SECOND, harder-to-miss confirmation — useful for a usability
+          // study where "did the tester even notice the call ended" is
+          // itself one of the things being measured.
+          addToast({
+            variant: "error",
+            icon: PhoneOff,
+            title: "Call Ended",
+            message: `Your call with ${interactionDisplayName(interaction)} has ended.`,
+            duration: 5000,
+          });
         }}
         mergedInteractions={(interaction.mergedInteractionIds ?? [])
           .map((id) => interactions.find((i) => i.id === id))
@@ -9654,6 +9671,26 @@ export function AgentWorkspace2WithDeskPage({
                       }
                       iconDivider={false}
                       title={interactionDisplayName(activeInteraction)}
+                      // Per explicit request ("add a very noticeable 'Call
+                      // ended' pill next to customer name when a call is
+                      // ended"): this record header's own free `titleSuffix`
+                      // slot (unused since the channel-toggle group that
+                      // used to live here moved to `actions`, below — see
+                      // that slot's own doc comment) is exactly "content
+                      // rendered immediately after the title... directly
+                      // right of the customer name," so no new layout work
+                      // was needed. `voiceCallEnded` — same flag Hang Up
+                      // already sets and every other "has this call ended"
+                      // check in this file already reads (see that field's
+                      // own doc comment) — not `interaction.closed`, which
+                      // is a separate, later, agent-dispositioned state
+                      // (rule #25) that doesn't flip the instant the call
+                      // itself ends.
+                      titleSuffix={
+                        activeInteraction.voiceCallEnded ? (
+                          <Tag shape="pill" variant="critical" label="Call Ended" />
+                        ) : undefined
+                      }
                       // Per explicit follow-up request (mockup's own 4
                       // states — even State 2/4, with the full tab row
                       // showing, still read the ACTIVE tab's own "{icon}
