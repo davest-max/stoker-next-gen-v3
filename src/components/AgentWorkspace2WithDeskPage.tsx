@@ -2282,13 +2282,23 @@ export function AgentWorkspace2WithDeskPage({
       setChannelsAllExpanded(false);
     }
   }, [channelsExpandedById, interactions, channelsAllExpanded]);
-  const [activeInteractionId, setActiveInteractionId] = useState<string | null>(
-    // Defaults to the seeded conference call (see `TEST_SEED_INTERACTIONS`'s
-    // own doc comment) so a tester lands directly on the most distinctive
-    // new work instead of the plain Home dashboard — only while that seed
-    // is actually active and `initialInteraction` hasn't already won.
-    () => initialInteraction?.id ?? (SEED_TEST_INTERACTIONS ? TEST_SEED_CONFERENCE_CALL.id : null)
-  );
+  const [activeInteractionId, setActiveInteractionId] = useState<string | null>(() => {
+    if (initialInteraction) return initialInteraction.id;
+    if (!SEED_TEST_INTERACTIONS) return null;
+    // Per explicit request ("for each url param default to Nathan Cole as
+    // the active voice call. This will help usertesting.com testers start
+    // in the right place according to test questions"): every one of this
+    // app's own `?voiceControls=<value>` test links
+    // (`getVoiceControlsPositionOverrideFromUrl`,
+    // agent-next-gen-voice-controls-position.ts) is specifically a
+    // usertesting.com tester link, and that test plan's own Task 1 opens
+    // on Nathan Cole's call — landing them there directly means the task
+    // instructions can start at "start a consult" instead of first making
+    // them find and switch to Nathan's card. No URL override present
+    // (an agent just using the app normally) keeps the original default
+    // below — the seeded conference call, the most distinctive new work.
+    return getVoiceControlsPositionOverrideFromUrl() ? TEST_SEED_PLAIN_CALL_1.id : TEST_SEED_CONFERENCE_CALL.id;
+  });
   // Customers table's "+ Filter" state, lifted up here (not local to
   // `CustomersListView`) — that component sits inside the Desk dashboard's
   // own branch of the `showSettings ? ... : activeInteraction ? ... : (
