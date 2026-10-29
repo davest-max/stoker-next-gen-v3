@@ -96,6 +96,7 @@ import {
   SHOW_ADD_CHANNEL_HEADER_BUTTON,
   buildContactOverviewInfo,
   buildCustomerContextOverviewInfo,
+  HIDE_BRANDING_FOR_TESTING,
   type CustomerPriorContactInfo,
   type Page,
 } from "@/components/agent-next-gen-shared-utils";
@@ -217,6 +218,7 @@ import { VoiceCallControls } from "@/components/agent-next-gen-voice-call-contro
 import {
   getVoiceControlsPosition,
   setVoiceControlsPosition,
+  getVoiceControlsPositionOverrideFromUrl,
   type VoiceControlsPosition,
 } from "@/components/agent-next-gen-voice-controls-position";
 import { VoiceControlsPositionSetting } from "@/components/agent-next-gen-voice-controls-position-setting";
@@ -3257,9 +3259,22 @@ export function AgentWorkspace2WithDeskPage({
   // persisting half) is called right alongside this state's own setter —
   // see `VoiceControlsPositionSetting`'s own doc comment for why this page
   // owns both instead of leaving the setting component to manage either.
-  const [voiceControlsPosition, setVoiceControlsPositionState] = useState<VoiceControlsPosition>(
-    () => getVoiceControlsPosition()
-  );
+  // `getVoiceControlsPositionOverrideFromUrl()` — per explicit request ("I
+  // need to show each voice control settings variation to different
+  // testers... Each with a unique URL"): a `?voiceControls=<value>` on the
+  // page's own URL wins over whatever's already in storage, persisting it
+  // (`setVoiceControlsPosition`) too — so a tester's own link alone
+  // decides what they see, the choice survives THEIR OWN reloads during
+  // the session, and it still shows/updates correctly in Settings exactly
+  // as if they'd picked it there themselves.
+  const [voiceControlsPosition, setVoiceControlsPositionState] = useState<VoiceControlsPosition>(() => {
+    const urlOverride = getVoiceControlsPositionOverrideFromUrl();
+    if (urlOverride) {
+      setVoiceControlsPosition(urlOverride);
+      return urlOverride;
+    }
+    return getVoiceControlsPosition();
+  });
 
   // Per explicit follow-up request ("detach the contacts table from the
   // search panel and have it exist on its own") — a fourth top-level view
@@ -7721,11 +7736,21 @@ export function AgentWorkspace2WithDeskPage({
           // overlap risk instead of a fixed viewport-width guess.
           <div ref={appNameMeasureRef} className="flex items-center">
             <AppNameMenu
-              icon={<img src={appIcon} alt="Agent Workspace 2.0 | Phase 2" className="h-6 w-6" />}
-              name="Agent Workspace 2.0 | Phase 2"
+              // Per `HIDE_BRANDING_FOR_TESTING`'s own doc comment (agent-
+              // next-gen-shared-utils.ts) — a blank same-size placeholder
+              // instead of the smiley mark (`icon` is required, so it
+              // can't just be omitted).
+              icon={
+                HIDE_BRANDING_FOR_TESTING ? (
+                  <div className="h-6 w-6 shrink-0" aria-hidden="true" />
+                ) : (
+                  <img src={appIcon} alt="Agent Workspace 2.0 | Phase 2" className="h-6 w-6" />
+                )
+              }
+              name={HIDE_BRANDING_FOR_TESTING ? "Workspace | Phase 2" : "Agent Workspace 2.0 | Phase 2"}
               compact={isCompactHeader}
               groups={appMenuGroups}
-              menuFooter={<CXoneLogo />}
+              menuFooter={HIDE_BRANDING_FOR_TESTING ? undefined : <CXoneLogo />}
               open={appMenuOpen}
               onOpenChange={setAppMenuOpen}
             />
@@ -11901,7 +11926,17 @@ export function AgentWorkspace2WithDeskPage({
             later. */}
         <AgentWelcomeMessage
           bare
-          icon={<img src={appIcon} alt="" className="h-8 w-8 shrink-0" />}
+          // Per `HIDE_BRANDING_FOR_TESTING`'s own doc comment — a blank
+          // same-size placeholder instead of the smiley mark (omitting
+          // `icon` entirely would just fall back to `AgentWelcomeMessage`'s
+          // own identical default, lyra-ui's agent-welcome-message.tsx).
+          icon={
+            HIDE_BRANDING_FOR_TESTING ? (
+              <div className="h-8 w-8 shrink-0" aria-hidden="true" />
+            ) : (
+              <img src={appIcon} alt="" className="h-8 w-8 shrink-0" />
+            )
+          }
           title={`Good morning, ${CURRENT_AGENT_FIRST_NAME} ${CURRENT_AGENT_LAST_NAME}`}
           lastLogin={WELCOME_MODAL_LAST_LOGIN}
           onPrimaryClick={handleGoAvailable}

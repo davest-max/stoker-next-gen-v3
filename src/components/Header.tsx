@@ -12,6 +12,7 @@ import {
   CXoneLogo,
   type AppMenuGroup,
 } from "@nicecxone/lyra-ui";
+import { HIDE_BRANDING_FOR_TESTING } from "@/components/agent-next-gen-shared-utils";
 
 type Page = "agent-workspace" | "agent-advanced" | "outbound" | "login";
 
@@ -41,7 +42,11 @@ export function Header({ onNavigate, currentPage = "agent-workspace" }: HeaderPr
         // menu, agent-next-gen-outbound-data.tsx's `buildAppMenuGroups`)
         // so this row still goes somewhere real instead of a dead page id.
         { label: "Agent Next Gen", onClick: () => navigate("agent-advanced") },
-        { label: "Agent Workspace Premium", active: currentPage === "agent-workspace", onClick: () => navigate("agent-workspace") },
+        {
+          label: HIDE_BRANDING_FOR_TESTING ? "Workspace Premium" : "Agent Workspace Premium",
+          active: currentPage === "agent-workspace",
+          onClick: () => navigate("agent-workspace"),
+        },
         { label: "Outbound Engagement", active: currentPage === "outbound", onClick: () => navigate("outbound") },
         { label: "Login", active: currentPage === "login", onClick: () => navigate("login") },
       ],
@@ -81,13 +86,33 @@ export function Header({ onNavigate, currentPage = "agent-workspace" }: HeaderPr
         <div className="relative">
           <AppName
             ref={triggerRef}
-            icon={<img src={appIcon} alt="Desk" className="h-6 w-6" />}
-            name={currentPage === "outbound" ? "Outbound Engagement" : "Agent Workspace Premium"}
+            // `icon` — per `HIDE_BRANDING_FOR_TESTING`'s own doc comment:
+            // a blank same-size placeholder instead of the smiley mark
+            // while the flag is on (this prop is required, so it can't
+            // just be omitted).
+            icon={
+              HIDE_BRANDING_FOR_TESTING ? (
+                <div className="h-6 w-6 shrink-0" aria-hidden="true" />
+              ) : (
+                <img src={appIcon} alt="Desk" className="h-6 w-6" />
+              )
+            }
+            name={
+              currentPage === "outbound"
+                ? "Outbound Engagement"
+                : HIDE_BRANDING_FOR_TESTING
+                  ? "Workspace Premium"
+                  : "Agent Workspace Premium"
+            }
             onClick={() => setMenuOpen((v) => !v)}
           />
           {menuOpen && (
             <div ref={menuRef} className="absolute left-0 top-full z-50 mt-1">
-              <AppMenu groups={appMenuGroups} footer={<CXoneLogo />} />
+              {/* `CXoneLogo` — omitted outright (not just blanked) while
+                  `HIDE_BRANDING_FOR_TESTING` — `AppMenu`'s own `footer` is
+                  optional, so dropping it cleanly removes the row instead
+                  of leaving an empty one. */}
+              <AppMenu groups={appMenuGroups} footer={HIDE_BRANDING_FOR_TESTING ? undefined : <CXoneLogo />} />
             </div>
           )}
         </div>

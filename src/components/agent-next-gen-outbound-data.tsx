@@ -2,7 +2,14 @@
 // agent-next-gen-shared-utils.ts and sibling agent-next-gen-*.ts(x) files
 // for everything AgentNextGenPage.tsx itself no longer declares — split out
 // once that file crossed Babel's 500KB code-generator threshold.
-import { type Page, initialsFor, synthesizePhone, hashSeed, splitCustomerName } from "@/components/agent-next-gen-shared-utils";
+import {
+  type Page,
+  initialsFor,
+  synthesizePhone,
+  hashSeed,
+  splitCustomerName,
+  HIDE_BRANDING_FOR_TESTING,
+} from "@/components/agent-next-gen-shared-utils";
 import { CONTACT_HISTORY, type ContactHistoryEntry } from "@/components/agent-next-gen-contact-history";
 import { type AppMenuGroup, type CreateNewOutboundConfig, type CreateNewOutboundContact, WhatsAppIcon } from "@nicecxone/lyra-ui";
 import { CREATE_NEW_AGENTS } from "@nicecxone/lyra-ui/agents-data";
@@ -127,12 +134,14 @@ export function buildAppMenuGroups(onNavigate: ((page: Page) => void) | undefine
     {
       items: [
         {
-          label: "Agent Workspace 2.0 | Phase 1",
+          // Per `HIDE_BRANDING_FOR_TESTING`'s own doc comment (agent-next-
+          // gen-shared-utils.ts).
+          label: HIDE_BRANDING_FOR_TESTING ? "Workspace | Phase 1" : "Agent Workspace 2.0 | Phase 1",
           active: currentPage === "agent-advanced",
           onClick: () => onNavigate?.("agent-advanced"),
         },
         {
-          label: "Agent Workspace 2.0 | Phase 2",
+          label: HIDE_BRANDING_FOR_TESTING ? "Workspace | Phase 2" : "Agent Workspace 2.0 | Phase 2",
           active: currentPage === "agent-with-desk",
           onClick: () => onNavigate?.("agent-with-desk"),
         },

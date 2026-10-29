@@ -1,4 +1,5 @@
 import { LoginCard } from "@nicecxone/lyra-ui";
+import { HIDE_BRANDING_FOR_TESTING } from "@/components/agent-next-gen-shared-utils";
 
 type Page = "agent-workspace" | "agent-advanced" | "outbound" | "login";
 
@@ -19,7 +20,14 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
           in-progress "Launching Agent Workspace…" status text is
           untouched. */}
       <LoginCard
-        appName="Agent Workspace"
+        // Per `HIDE_BRANDING_FOR_TESTING`'s own doc comment — this also
+        // changes the in-progress "Launching {appName}…" status text for
+        // free, since `LoginCard` builds that string from this same prop.
+        appName={HIDE_BRANDING_FOR_TESTING ? "Workspace" : "Agent Workspace"}
+        // `appIcon` defaults to the shared smiley mark (`login-card.tsx`)
+        // when omitted — passing a blank same-size placeholder instead
+        // while the flag is on.
+        appIcon={HIDE_BRANDING_FOR_TESTING ? <div className="h-5 w-5" aria-hidden="true" /> : undefined}
         launchButtonLabel="Launch"
         // Per explicit request ("remove phase 1 for now ... completely
         // delete the phase 1 files"): this used to launch straight into

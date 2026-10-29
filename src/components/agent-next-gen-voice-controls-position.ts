@@ -49,3 +49,27 @@ export function setVoiceControlsPosition(next: VoiceControlsPosition): void {
     // just won't survive a reload.
   }
 }
+
+// Per explicit request ("I need to show each voice control settings
+// variation to different testers. One variation for each tester. Each
+// with a unique URL"): reads `?voiceControls=<value>` from the page's own
+// query string — e.g. `?voiceControls=withinTile#/agent-premium` — so a
+// tester's link alone decides which variation they land on, without
+// anyone having to walk them through Settings first. Returns `null` (not
+// a fallback to the default) when the param is absent or isn't one of the
+// three real values, so a caller can tell "no override, use whatever's
+// already persisted" apart from "override to the default" — those aren't
+// the same thing once a value is ALSO being persisted (below). Read via
+// `location.search` specifically (not the `#/...` hash this app's own
+// routing lives in) — query strings sit before the hash in a URL and are
+// always available through `location.search` regardless of how the hash
+// itself gets parsed for page routing, so this needs no coordination with
+// that routing at all.
+export function getVoiceControlsPositionOverrideFromUrl(): VoiceControlsPosition | null {
+  try {
+    const raw = new URLSearchParams(window.location.search).get("voiceControls");
+    return raw === "bottom" || raw === "aboveAssignments" || raw === "withinTile" ? raw : null;
+  } catch {
+    return null;
+  }
+}

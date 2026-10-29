@@ -106,6 +106,7 @@ import {
   synthesizeChannelAddress,
   SHOW_ADD_CHANNEL_HEADER_BUTTON,
   buildCustomerContextOverviewInfo,
+  HIDE_BRANDING_FOR_TESTING,
   type CustomerPriorContactInfo,
   type Page,
 } from "@/components/agent-next-gen-shared-utils";
@@ -216,6 +217,7 @@ import { VoiceCallControls } from "@/components/agent-next-gen-voice-call-contro
 import {
   getVoiceControlsPosition,
   setVoiceControlsPosition,
+  getVoiceControlsPositionOverrideFromUrl,
   type VoiceControlsPosition,
 } from "@/components/agent-next-gen-voice-controls-position";
 import { VoiceControlsPositionSetting } from "@/components/agent-next-gen-voice-controls-position-setting";
@@ -2387,9 +2389,16 @@ export function AgentWorkspaceAdvancedPage({
   // is called right alongside this state's own setter — see
   // `VoiceControlsPositionSetting`'s own doc comment for why this page owns
   // both instead of leaving the setting component to manage either.
-  const [voiceControlsPosition, setVoiceControlsPositionState] = useState<VoiceControlsPosition>(
-    () => getVoiceControlsPosition()
-  );
+  // `getVoiceControlsPositionOverrideFromUrl()` — see the identical
+  // conditional's own doc comment in AgentWorkspace2WithDeskPage.tsx.
+  const [voiceControlsPosition, setVoiceControlsPositionState] = useState<VoiceControlsPosition>(() => {
+    const urlOverride = getVoiceControlsPositionOverrideFromUrl();
+    if (urlOverride) {
+      setVoiceControlsPosition(urlOverride);
+      return urlOverride;
+    }
+    return getVoiceControlsPosition();
+  });
 
   // Per explicit follow-up request ("detach the contacts table from the
   // search panel and have it exist on its own") — a fourth top-level view
@@ -6852,11 +6861,19 @@ export function AgentWorkspaceAdvancedPage({
                 `AppNameMenu` call site already uses for its title ("Agent
                 Workspace 2.0 | Phase 2"). */}
             <AppNameMenu
-              icon={<img src={appIcon} alt="Agent Workspace 2.0 | Phase 1" className="h-6 w-6" />}
-              name="Agent Workspace 2.0 | Phase 1"
+              // See the identical conditional's own doc comment in
+              // AgentWorkspace2WithDeskPage.tsx.
+              icon={
+                HIDE_BRANDING_FOR_TESTING ? (
+                  <div className="h-6 w-6 shrink-0" aria-hidden="true" />
+                ) : (
+                  <img src={appIcon} alt="Agent Workspace 2.0 | Phase 1" className="h-6 w-6" />
+                )
+              }
+              name={HIDE_BRANDING_FOR_TESTING ? "Workspace | Phase 1" : "Agent Workspace 2.0 | Phase 1"}
               compact={isCompactHeader}
               groups={appMenuGroups}
-              menuFooter={<CXoneLogo />}
+              menuFooter={HIDE_BRANDING_FOR_TESTING ? undefined : <CXoneLogo />}
               open={appMenuOpen}
               onOpenChange={setAppMenuOpen}
             />
@@ -11203,7 +11220,15 @@ export function AgentWorkspaceAdvancedPage({
             later. */}
         <AgentWelcomeMessage
           bare
-          icon={<img src={appIcon} alt="" className="h-8 w-8 shrink-0" />}
+          // See the identical conditional's own doc comment in
+          // AgentWorkspace2WithDeskPage.tsx.
+          icon={
+            HIDE_BRANDING_FOR_TESTING ? (
+              <div className="h-8 w-8 shrink-0" aria-hidden="true" />
+            ) : (
+              <img src={appIcon} alt="" className="h-8 w-8 shrink-0" />
+            )
+          }
           title={`Good morning, ${CURRENT_AGENT_FIRST_NAME} ${CURRENT_AGENT_LAST_NAME}`}
           lastLogin={WELCOME_MODAL_LAST_LOGIN}
           onPrimaryClick={handleGoAvailable}

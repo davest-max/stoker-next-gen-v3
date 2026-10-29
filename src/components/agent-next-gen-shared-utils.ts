@@ -176,6 +176,16 @@ function newCaseNotificationTitle(channel: ChannelType): string {
   return `New ${channelNoun(channel)}`;
 }
 
+// Per explicit request ("for testing purposes, I need to hide all
+// references to Agent Workspace, NiCE and the smiley face logo. Hide all
+// of those instances"): a single switch every touched call site reads,
+// rather than hand-editing each one with no way back — "hide, don't
+// destroy" (same convention `HIDDEN_OUTBOUND_GROUP_IDS`/`SEED_TEST_
+// INTERACTIONS` already use elsewhere in this app). Flip back to `false`
+// to restore every app-menu/login/welcome-modal label, the `app-icon.svg`
+// smiley mark, and the `CXoneLogo` app-menu footer, all at once.
+const HIDE_BRANDING_FOR_TESTING = true;
+
 /* Logged-in agent — matches the "Good morning, John" home screen greeting.
    Used both to populate the Owner Assignee column and to decide whether an
    interaction's kebab menu should offer "Assign To Me" (only when it isn't
@@ -1028,6 +1038,7 @@ export {
   channelNoun,
   newCaseNotificationTitle,
   CURRENT_AGENT_NAME,
+  HIDE_BRANDING_FOR_TESTING,
   CURRENT_AGENT_FIRST_NAME,
   CURRENT_AGENT_LAST_NAME,
   CURRENT_AGENT_ID,

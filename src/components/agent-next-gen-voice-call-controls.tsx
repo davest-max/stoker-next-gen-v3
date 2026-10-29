@@ -1047,16 +1047,33 @@ function ConsultCard({
 function EndCallChoiceMenu({
   onLeave,
   onEndForEveryone,
+  endForEveryoneDisabled,
 }: {
   onLeave: () => void;
   onEndForEveryone: () => void;
+  /** Per explicit follow-up request ("if the agent is on hold they are not
+   *  able to end the call... They can choose to leave the call when on
+   *  hold, but cannot end for everyone if they are on hold"): disables just
+   *  "End Call for Everyone" while the agent is self-held — an agent who
+   *  isn't actually on the line shouldn't be the one deciding to end it for
+   *  everyone else still on it. "Leave Call" stays enabled either way —
+   *  that's the agent removing only their own (already self-held) leg,
+   *  which is unaffected by them not currently being on the line. */
+  endForEveryoneDisabled?: boolean;
 }) {
   return (
     <div className="flex w-56 flex-col gap-1.5 p-3">
       <Button variant="outline" size="md" className="w-full justify-center" onClick={onLeave}>
         Leave Call
       </Button>
-      <Button variant="destructive" size="md" className="w-full justify-center" onClick={onEndForEveryone}>
+      <Button
+        variant="destructive"
+        size="md"
+        className="w-full justify-center"
+        onClick={onEndForEveryone}
+        disabled={endForEveryoneDisabled}
+        title={endForEveryoneDisabled ? "Resume the call before ending it for everyone" : undefined}
+      >
         End Call for Everyone
       </Button>
     </div>
@@ -1760,6 +1777,47 @@ export function VoiceCallControls({
   const [colleagues, setColleagues] = useState<CallColleague[]>(
     () => initialColleagues?.map((c) => ({ id: c.id, name: c.name, isOnHold: false, isInternalAgent: c.isInternalAgent })) ?? []
   );
+  // Whether a real conference is in progress — the main bar's own Hold
+  // button (and `onHold`/`heldElapsedSeconds`) means something different
+  // once this is true (see `customerOnHold`'s own doc comment, right
+  // below, and the button's own doc comment further down): per explicit
+  // follow-up request ("what is needed is either to hide the main customer
+  // hold button when in a conference... Or change its behavior to become a
+  // hold for the agent... keep main button, allow that to be the agent's
+  // self-hold"), the CUSTOMER'S own hold stops being this bar's own
+  // `onHold`/main-button concern the moment a real conference exists —
+  // the customer becomes just another roster row with its own independent
+  // hold, same as every colleague.
+  const isConference = colleagues.length > 0;
+  // The customer's own hold state, once in a conference — previously the
+  // customer's roster row shared the SAME `onHold` the main bar's button
+  // also drove (literally two controls for one piece of state, per a
+  // confirmed bug report: "the original customer... now has two hold
+  // buttons. That is redundant and unnecessary"). Independent local state
+  // now, exactly like `CallColleague.isOnHold` — the customer is
+  // conceptually just another participant's row once a conference exists.
+  // Seeded (and `onHold` cleared) the moment the FIRST colleague merges in
+  // — see `handleMergeConsult`'s own doc comment for why: carries forward
+  // whatever the customer's REAL hold state actually was the instant
+  // before the conference started, rather than losing it or having it
+  // suddenly reinterpreted as the agent's own self-hold.
+  const [customerOnHold, setCustomerOnHold] = useState(false);
+  // Whether the AGENT is currently self-held (only meaningful once
+  // `isConference` — see that const's own doc comment). Per explicit
+  // direction ("lock down most controls... Mute/Keypad/Consult/Add Video
+  // disable... roster Hold/Transfer/Drop per participant stay usable"),
+  // LATER narrowed by a follow-up ("keep the consult button active even
+  // when agent is on hold") — Consult stays usable (the agent can still
+  // start a new consult, e.g. to loop in one more person, before
+  // resuming); Mute/Keypad/Add Video still gate on this (nothing to mute
+  // or dial while the agent isn't actually on the line). Deliberately
+  // does NOT touch the roster's own per-participant controls (Hold/
+  // Transfer/Drop, `rosterInteractive`) — those govern the CONFERENCE
+  // among everyone else, which keeps running uninterrupted while the
+  // agent steps away (per explicit confirmation: "customer and
+  // colleagues [should] still be able to talk to each other
+  // uninterrupted").
+  const isSelfHeld = onHold && isConference;
   // Notifies the caller every time the roster's actual MEMBERSHIP changes
   // (a merge or a drop) — see `onColleaguesChange`'s own doc comment.
   // Deliberately keyed on `colleagues` itself, not called inline inside
@@ -2048,6 +2106,17 @@ export function VoiceCallControls({
   // into what's now a three-(or-more-)way conference.
   const handleMergeConsult = () => {
     if (!consult) return;
+    // The FIRST colleague merging in is what actually starts a real
+    // conference — `onHold` is about to stop meaning "the customer is on
+    // hold" and start meaning "the agent self-held" instead (see
+    // `isConference`/`customerOnHold`'s own doc comments, above). Carry
+    // the customer's own real hold state forward into their new
+    // independent `customerOnHold` field before `onHold` gets cleared
+    // below, so merging doesn't silently un-hold (or re-badge as agent-
+    // self-hold) a customer who was genuinely already on hold.
+    if (!isConference) {
+      setCustomerOnHold(onHold);
+    }
     setColleagues((prev) => [
       ...prev,
       { id: consult.id, name: consult.name, isOnHold: false, isInternalAgent: consult.isInternalAgent },
@@ -2349,7 +2418,9 @@ export function VoiceCallControls({
             variant={trailingControlsPlain ? undefined : "outline"}
             aria-label={muted ? "Unmute" : "Mute"}
             onClick={() => setMuted((m) => !m)}
-            disabled={isEnding}
+            // `isSelfHeld` — nothing to mute while the agent isn't on the
+            // line (see that const's own doc comment, above).
+            disabled={isEnding || isSelfHeld}
           />
         </Tooltip>
       ) : (
@@ -2363,8 +2434,8 @@ export function VoiceCallControls({
           // `variant` doc comment.
           variant="outline"
           onClick={() => setMuted((m) => !m)}
-          // See `isEnding`'s own doc comment above.
-          disabled={isEnding}
+          // See `isEnding`'s/`isSelfHeld`'s own doc comments, above.
+          disabled={isEnding || isSelfHeld}
         />
       )}
       {/* Add video — same `strong` darkening as Mute per the reference
@@ -2390,7 +2461,8 @@ export function VoiceCallControls({
               }
               setLocalVideoAdded((prev) => !prev);
             }}
-            disabled={isEnding}
+            // `isSelfHeld` — see that const's own doc comment, above.
+            disabled={isEnding || isSelfHeld}
           />
         </Tooltip>
       ) : (
@@ -2407,7 +2479,7 @@ export function VoiceCallControls({
             }
             setLocalVideoAdded((prev) => !prev);
           }}
-          disabled={isEnding}
+          disabled={isEnding || isSelfHeld}
         />
       ))}
       {/* End Call — see this file's own git history for the full "why" on
@@ -2430,9 +2502,11 @@ export function VoiceCallControls({
               handleLeaveCall();
             }}
             onEndForEveryone={() => {
+              if (isSelfHeld) return;
               setEndCallMenuOpen(false);
               handleEndForEveryone();
             }}
+            endForEveryoneDisabled={isSelfHeld}
           />
         }
       >
@@ -2857,7 +2931,14 @@ export function VoiceCallControls({
               agent sees it. */}
           {onHold && heldElapsedLabel && (
             <span className="lyra-body-xs text-lyra-status-critical-strong">
-              On Hold · <span className="tabular-nums">{heldElapsedLabel}</span>
+              {/* "You're on hold" once a real conference exists — this line
+                  (and the button driving it) no longer means the customer
+                  is on hold at that point, see `isConference`'s own doc
+                  comment. Reuses this exact same line/placement rather than
+                  a new element — per explicit direction ("reuse that same
+                  red line, relabeled"). */}
+              {isConference ? "You're on hold" : "On Hold"} ·{" "}
+              <span className="tabular-nums">{heldElapsedLabel}</span>
             </span>
           )}
           {/* Rail-only placement — see `conferenceTags`'s own doc comment
@@ -3007,22 +3088,16 @@ export function VoiceCallControls({
                     ? "text-lyra-status-critical-strong bg-lyra-status-critical-subtle hover:text-lyra-status-critical-strong"
                     : undefined
                 }
-                onClick={() => {
-                  const next = !onHold;
-                  setOnHold(next);
-                  setColleagues((prev) => prev.map((c) => ({ ...c, isOnHold: next })));
-                }}
+                onClick={() => setOnHold(!onHold)}
                 // Disabled during a consult too — `ConsultBanner`'s own
                 // two per-party Hold buttons own hold-toggling for that
                 // duration (they have to flip the customer's AND the
                 // consult leg's hold in lockstep, which this button
-                // doesn't know about), and this button's own cascade-to-
-                // every-colleague behavior below would otherwise fight it.
-                // Also disabled once this call is bridged into a merged
-                // call (`mergedInteractions`) — holding one leg of a
-                // merge has no clear meaning once two independent
-                // customers are actually on the same bridge (see that
-                // prop's own doc comment).
+                // doesn't know about). Also disabled once this call is
+                // bridged into a merged call (`mergedInteractions`) —
+                // holding one leg of a merge has no clear meaning once two
+                // independent customers are actually on the same bridge
+                // (see that prop's own doc comment).
                 disabled={isEnding || !!consult || !!mergedInteractions?.length}
               />
             </Tooltip>
@@ -3040,11 +3115,14 @@ export function VoiceCallControls({
                   ? "text-lyra-status-critical-strong bg-lyra-status-critical-subtle hover:text-lyra-status-critical-strong"
                   : undefined
               }
-              onClick={() => {
-                const next = !onHold;
-                setOnHold(next);
-                setColleagues((prev) => prev.map((c) => ({ ...c, isOnHold: next })));
-              }}
+              // Per a confirmed bug report ("clicking on the main hold
+              // button when in a conference puts everyone on hold. This
+              // behavior is not needed and should not do that"): no more
+              // cascading `setColleagues` here — see `isConference`'s own
+              // doc comment, above, for what this button means NOW instead
+              // once a real conference exists (the agent's own self-hold,
+              // not "hold everyone").
+              onClick={() => setOnHold(!onHold)}
               disabled={isEnding || !!consult || !!mergedInteractions?.length}
             />
           )}
@@ -3178,9 +3256,9 @@ export function VoiceCallControls({
               its own `...rest` spread) is now redundant with its own
               visible label text, but harmless to leave. */}
           <Popover
-            open={keypadOpen && !isEnding}
+            open={keypadOpen && !isEnding && !isSelfHeld}
             onOpenChange={(next: boolean) => {
-              if (!isEnding) setKeypadOpen(next);
+              if (!isEnding && !isSelfHeld) setKeypadOpen(next);
             }}
             placement="top"
             bodyPadding={false}
@@ -3200,7 +3278,9 @@ export function VoiceCallControls({
                 active={keypadOpen}
                 aria-label="Keypad"
                 title="Keypad"
-                disabled={isEnding}
+                // `isSelfHeld` — nothing to dial while the agent isn't on
+                // the line (see that const's own doc comment, above).
+                disabled={isEnding || isSelfHeld}
               />
             ) : (
               <WideCallControlButton
@@ -3212,7 +3292,8 @@ export function VoiceCallControls({
                 // also force-closes this popover directly (`setKeypadOpen
                 // (false)`) rather than relying on this alone, since
                 // `disabled` only blocks NEW opens, not one already open.
-                disabled={isEnding}
+                // `isSelfHeld` — see that const's own doc comment, above.
+                disabled={isEnding || isSelfHeld}
               />
             )}
           </Popover>
@@ -3243,6 +3324,11 @@ export function VoiceCallControls({
               to show while one's already open); already-merged colleagues
               don't block reopening this to add another. */}
           <Popover
+            // Per explicit follow-up request ("keep the consult button
+            // active even when agent is on hold") — Consult is deliberately
+            // NOT part of `isSelfHeld`'s lockdown (unlike Mute/Keypad/Add
+            // video, above): the agent can still start a new consult while
+            // self-held, e.g. to loop in one more person before resuming.
             open={conferenceOpen && !isEnding}
             onOpenChange={(next: boolean) => {
               if (!isEnding) setConferenceOpen(next);
@@ -3480,10 +3566,31 @@ export function VoiceCallControls({
                 {
                   key: "customer",
                   node: (
+                    // `customerOnHold`, not `onHold`, once a real conference
+                    // exists — per a confirmed bug report ("the original
+                    // customer... now has two hold buttons. That is
+                    // redundant and unnecessary... should have only a hold
+                    // inline in the list of names like other participants"):
+                    // `onHold`/the main bar's own Hold button is now the
+                    // AGENT's own self-hold once `isConference` (see that
+                    // const's own doc comment) — the customer's hold is its
+                    // own independent state instead, exactly like every
+                    // colleague's own `isOnHold`. Falls back to `onHold`
+                    // only in the one case this row can render WITHOUT a
+                    // real conference (`hasRoster` via `mergedInteractions`
+                    // alone, no actual colleagues) — unchanged there, and
+                    // that main button stays disabled in that case anyway
+                    // (`mergedInteractions?.length` in its own `disabled`).
                     <ParticipantRow
                       label={customerLabel ?? "Customer"}
-                      isOnHold={onHold}
-                      onToggleHold={rosterInteractive ? () => setOnHold(!onHold) : undefined}
+                      isOnHold={isConference ? customerOnHold : onHold}
+                      onToggleHold={
+                        rosterInteractive
+                          ? isConference
+                            ? () => setCustomerOnHold(!customerOnHold)
+                            : () => setOnHold(!onHold)
+                          : undefined
+                      }
                     />
                   ),
                 },
