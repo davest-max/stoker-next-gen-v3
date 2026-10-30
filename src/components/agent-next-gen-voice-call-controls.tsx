@@ -1796,11 +1796,12 @@ export function VoiceCallControls({
   // buttons. That is redundant and unnecessary"). Independent local state
   // now, exactly like `CallColleague.isOnHold` — the customer is
   // conceptually just another participant's row once a conference exists.
-  // Seeded (and `onHold` cleared) the moment the FIRST colleague merges in
-  // — see `handleMergeConsult`'s own doc comment for why: carries forward
-  // whatever the customer's REAL hold state actually was the instant
-  // before the conference started, rather than losing it or having it
-  // suddenly reinterpreted as the agent's own self-hold.
+  // Reset to `false` (and `onHold` cleared) every time a colleague
+  // merges in — see `handleMergeConsult`'s own doc comment for why: the
+  // customer always starts a (new, or further-grown) conference un-held,
+  // regardless of whatever transient hold the consult step itself put
+  // them under — that hold existed only so they wouldn't overhear the
+  // private consult, and ends the moment the consult does.
   const [customerOnHold, setCustomerOnHold] = useState(false);
   // Whether the AGENT is currently self-held (only meaningful once
   // `isConference` — see that const's own doc comment). Per explicit
@@ -2106,17 +2107,26 @@ export function VoiceCallControls({
   // into what's now a three-(or-more-)way conference.
   const handleMergeConsult = () => {
     if (!consult) return;
-    // The FIRST colleague merging in is what actually starts a real
-    // conference — `onHold` is about to stop meaning "the customer is on
-    // hold" and start meaning "the agent self-held" instead (see
-    // `isConference`/`customerOnHold`'s own doc comments, above). Carry
-    // the customer's own real hold state forward into their new
-    // independent `customerOnHold` field before `onHold` gets cleared
-    // below, so merging doesn't silently un-hold (or re-badge as agent-
-    // self-hold) a customer who was genuinely already on hold.
-    if (!isConference) {
-      setCustomerOnHold(onHold);
-    }
+    // `setCustomerOnHold(false)` — NOT carried forward from `onHold` —
+    // per a confirmed bug report ("when additional participants are
+    // merged into a conference call, the voice call puts the customer on
+    // hold. That shouldn't be the behavior. The default should be no one
+    // is on hold unless the user/agent selected hold"). An earlier pass
+    // here carried the customer's pre-merge `onHold` value into their new
+    // independent `customerOnHold` field (see `isConference`/
+    // `customerOnHold`'s own doc comments, above), reasoning "don't
+    // silently un-hold someone genuinely on hold" — but that conflated
+    // two different things: `onHold` is true at this exact moment ONLY
+    // because `ConferencePicker`'s own `onSelect` auto-holds the customer
+    // for the DURATION of the private consult (so they don't overhear
+    // it) — a transient side effect of consulting, not a deliberate
+    // choice the agent made about the customer. That transient hold ends
+    // the instant the consult itself ends, i.e. right here at merge — the
+    // customer (and every other participant) should always start a new
+    // conference un-held, exactly like every other colleague entry
+    // already does (`isOnHold: false`, right below), until the agent
+    // deliberately holds someone afterward.
+    setCustomerOnHold(false);
     setColleagues((prev) => [
       ...prev,
       { id: consult.id, name: consult.name, isOnHold: false, isInternalAgent: consult.isInternalAgent },
@@ -3733,9 +3743,24 @@ export function VoiceCallControls({
                   >
                     {avatarStack}
                     {chips.length - 1} {chips.length - 1 === 1 ? "participant" : "participants"}
+                    {/* Per explicit follow-up request ("the dropdown caret
+                        in the conference participant list is not being
+                        noticed... make that a bit larger and more
+                        noticeable"): was `h-3.5 w-3.5`/`strokeWidth={1.5}`
+                        inheriting this button's own muted `text-lyra-fg-
+                        secondary` — easy to miss as a real affordance next
+                        to the roster count text it sat flush against.
+                        Bigger (`h-5 w-5`), a bolder stroke, and its own
+                        `text-lyra-fg-default` (this row's full-strength
+                        text color, not the muted secondary one) make it
+                        read as a deliberate "this expands" control rather
+                        than a trailing decorative glyph. */}
                     <ChevronDown
-                      className={cn("ml-auto h-3.5 w-3.5 transition-transform", rosterExpanded && "rotate-180")}
-                      strokeWidth={1.5}
+                      className={cn(
+                        "ml-auto h-5 w-5 shrink-0 text-lyra-fg-default transition-transform",
+                        rosterExpanded && "rotate-180"
+                      )}
+                      strokeWidth={2}
                       aria-hidden="true"
                     />
                   </button>

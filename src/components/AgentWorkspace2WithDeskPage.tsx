@@ -3351,14 +3351,21 @@ export function AgentWorkspace2WithDeskPage({
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   const [notifications, setNotifications] = useState(INITIAL_NOTIFICATIONS);
   // Per explicit request ("even skipping any login or go available choices
-  // would be great also") — a usertesting.com link (`?voiceControls=
-  // <value>`, same override `activeInteractionId`'s own initializer above
-  // already reads) starts the agent already Available, so a tester never
-  // has to make this choice before the test script's own first step even
-  // begins. Every other visitor keeps the original "unavailable" default,
-  // surfaced through the welcome modal below exactly as before.
+  // would be great also"), LATER refined by a follow-up ("the agent should
+  // be in a working state as default page load since the agent is working
+  // with Nathan Cole and other voice calls") — a usertesting.com link
+  // (`?voiceControls=<value>`, same override `activeInteractionId`'s own
+  // initializer above already reads) starts the agent straight at
+  // "working", not "available" — the seeded test data always has live
+  // voice calls already in progress (see `TEST_SEED_INTERACTIONS`'s own
+  // doc comment) by the very first render, so "Available" was never
+  // actually true even for a moment; starting there first just meant
+  // briefly showing a status that didn't match what was really on screen,
+  // half a render before the `isOnVoiceCall` effect below corrected it to
+  // "working" anyway. Every other visitor keeps the original "unavailable"
+  // default, surfaced through the welcome modal below exactly as before.
   const [agentStatus, setAgentStatus] = useState<AgentStatus>(() =>
-    getVoiceControlsPositionOverrideFromUrl() ? "available" : "unavailable"
+    getVoiceControlsPositionOverrideFromUrl() ? "working" : "unavailable"
   );
   // 5-real-seconds-after-"available" trigger for the Marcus Webb scripted
   // scenario — no longer time-based (was a 30s, then 5s, real-time delay;
