@@ -6,6 +6,7 @@ import { AgentWorkspace2WithDeskPage } from "@/components/AgentWorkspace2WithDes
 import { AgentWorkspaceAdvancedPage } from "@/components/AgentWorkspaceAdvancedPage";
 import { OutboundEngagementPage } from "@/components/OutboundEngagementPage";
 import { LoginPage } from "@/components/LoginPage";
+import { getVoiceControlsPositionOverrideFromUrl } from "@/components/agent-next-gen-voice-controls-position";
 
 type Page = "agent-workspace" | "agent-with-desk" | "agent-advanced" | "outbound" | "login";
 
@@ -52,6 +53,20 @@ function pageFromHash(): Page {
   if (hash === "#/agent-advanced") return "agent-advanced";
   if (hash === "#/agentworkspacepremium") return "agent-workspace";
   if (hash === "#/outboundengagement") return "outbound";
+  // Per explicit request ("the url as it loads in usertesting.com needs
+  // to default to phase 2... do not default to phase 1"): a confirmed
+  // real occurrence — a tester's own usertesting.com link landed on this
+  // app with no recognizable hash at all (stripped or mangled somewhere
+  // between the test platform and the browser) and fell through to this
+  // app's own normal root, "login". A `?voiceControls=<value>` on the
+  // URL (agent-next-gen-voice-controls-position.ts) is the same signal
+  // this app already uses elsewhere to mean "this is a usertesting.com
+  // tester link" — when it's present, default straight to the Desk/
+  // Phase 2 page the test script is actually written against instead,
+  // so a mangled hash can't strand a tester on the wrong page (or the
+  // login screen) no matter what. Every other visitor (no override) is
+  // completely unaffected.
+  if (getVoiceControlsPositionOverrideFromUrl()) return "agent-with-desk";
   return "login";
 }
 

@@ -3350,7 +3350,16 @@ export function AgentWorkspace2WithDeskPage({
   }, [activeInteractionId]);
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   const [notifications, setNotifications] = useState(INITIAL_NOTIFICATIONS);
-  const [agentStatus, setAgentStatus] = useState<AgentStatus>("unavailable");
+  // Per explicit request ("even skipping any login or go available choices
+  // would be great also") — a usertesting.com link (`?voiceControls=
+  // <value>`, same override `activeInteractionId`'s own initializer above
+  // already reads) starts the agent already Available, so a tester never
+  // has to make this choice before the test script's own first step even
+  // begins. Every other visitor keeps the original "unavailable" default,
+  // surfaced through the welcome modal below exactly as before.
+  const [agentStatus, setAgentStatus] = useState<AgentStatus>(() =>
+    getVoiceControlsPositionOverrideFromUrl() ? "available" : "unavailable"
+  );
   // 5-real-seconds-after-"available" trigger for the Marcus Webb scripted
   // scenario — no longer time-based (was a 30s, then 5s, real-time delay;
   // per explicit follow-up request that proved fiddly to test/demo on
@@ -3420,7 +3429,11 @@ export function AgentWorkspace2WithDeskPage({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [agentStatus, transferHandoffTriggered]);
-  const [showWelcomeModal, setShowWelcomeModal] = useState(true);
+  // See `agentStatus`'s own identical conditional, above, for the full
+  // "why" — skips the "Good morning"/Go Available modal outright for a
+  // usertesting.com link, since `agentStatus` is already seeded to
+  // "available" above and there's nothing left for this modal to ask.
+  const [showWelcomeModal, setShowWelcomeModal] = useState(() => !getVoiceControlsPositionOverrideFromUrl());
   // Flushes whatever `fireAgentLegStatusToast` deferred (further up this
   // component) the moment the welcome modal actually closes (Go Available /
   // Start Offline), so the agent still sees that toast — just after, not
