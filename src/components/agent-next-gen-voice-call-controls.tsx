@@ -526,8 +526,12 @@ function ConferencePicker({
   joinableCall,
   onJoinCall,
   skillOptions,
+  onTransfer,
 }: {
   onSelect: (person: ConferencePickerPerson) => void;
+  /** Cold transfer straight to this row's person — no consult step first.
+   *  See `VoiceCallControls`'s own `handleColdTransfer` doc comment. */
+  onTransfer: (person: ConferencePickerPerson) => void;
   /** See `VoiceCallControlsProps.joinableCall`'s own doc comment — the one
    *  other live voice call (a customer call from an agent's own popover, or
    *  vice versa) this popover offers a one-click "Join call" shortcut for,
@@ -613,6 +617,19 @@ function ConferencePicker({
   // every tab switch so a term typed under Agents doesn't silently carry
   // over and look like it's filtering Skills too.
   const [search, setSearch] = useState("");
+  // Inline "Transfer?" confirm for the cold-transfer icon below — per
+  // explicit request ("add in a confirmation to confirm transfer"),
+  // answered as a lightweight inline flip rather than a second popover:
+  // the Transfer icon itself swaps for a label + Check/X pair (same
+  // established idiom `ParticipantRow`'s own Drop confirm already uses in
+  // this file), auto-clearing after a few seconds if never confirmed. Only
+  // one row can be armed at a time — a plain id, not a Set.
+  const [confirmingTransferId, setConfirmingTransferId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!confirmingTransferId) return;
+    const timeout = window.setTimeout(() => setConfirmingTransferId(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [confirmingTransferId]);
   const trimmedSearch = search.trim().toLowerCase();
   const matchesSearch = (person: ConferencePickerPerson) =>
     person.name.toLowerCase().includes(trimmedSearch) || person.subtitle.toLowerCase().includes(trimmedSearch);
@@ -854,9 +871,32 @@ function ConferencePicker({
                     <MessageSquare className="h-4 w-4" strokeWidth={1.5} />
                   </ActionIconButton>
                 )}
-                <ActionIconButton size="sm" title={`Transfer to ${person.name}`}>
-                  <TransferIcon />
-                </ActionIconButton>
+                {confirmingTransferId === person.id ? (
+                  <span className="flex items-center gap-0.5">
+                    <span className="lyra-body-xs text-lyra-fg-secondary whitespace-nowrap px-1">Transfer?</span>
+                    <ActionIconButton
+                      size="sm"
+                      title={`Confirm transfer to ${person.name}`}
+                      onClick={() => {
+                        setConfirmingTransferId(null);
+                        onTransfer(person);
+                      }}
+                    >
+                      <Check className="h-4 w-4 text-lyra-status-critical-strong" strokeWidth={2} />
+                    </ActionIconButton>
+                    <ActionIconButton size="sm" title="Cancel" onClick={() => setConfirmingTransferId(null)}>
+                      <X className="h-4 w-4" strokeWidth={2} />
+                    </ActionIconButton>
+                  </span>
+                ) : (
+                  <ActionIconButton
+                    size="sm"
+                    title={`Transfer to ${person.name}`}
+                    onClick={() => setConfirmingTransferId(person.id)}
+                  >
+                    <TransferIcon />
+                  </ActionIconButton>
+                )}
               </div>
             }
           />
@@ -1116,9 +1156,9 @@ function ParticipantRow({
   /** Presence alone gates the Hold/Resume icon — omitted for "You". */
   onToggleHold?: () => void;
   /** Presence alone gates the Transfer icon — only ever passed for a
-   *  colleague. Decorative (see this file's own "not wired up yet"
-   *  convention) rather than a real hand-off, same as every other Transfer
-   *  control in this app. */
+   *  colleague. Routed through the same inline "Transfer {name}?" Check/X
+   *  confirm this row's own Drop already uses (`confirmingAction`, below) —
+   *  only fires once that's confirmed, never on the raw click. */
   onTransfer?: () => void;
   /** Presence alone gates the Hang Up (drop) icon — only ever passed for a
    *  colleague. Routed through the same inline "Drop {name}?" Check/X
@@ -1152,7 +1192,19 @@ function ParticipantRow({
   className?: string;
 }) {
   const canExpand = !!onToggleHold || !!onTransfer || !!onHangUp;
-  const [confirming, setConfirming] = useState(false);
+  // Was a plain `confirming` boolean (Drop only) — widened to also cover
+  // Transfer's own inline confirm (per explicit request, "add in a
+  // confirmation to confirm transfer"), since a colleague row can show
+  // both icons and only one confirm should ever be showing at a time.
+  // Auto-clears after a few seconds unconfirmed, same "lightweight inline
+  // confirm, not a popover" answer used everywhere else this request
+  // touched.
+  const [confirmingAction, setConfirmingAction] = useState<"drop" | "transfer" | null>(null);
+  useEffect(() => {
+    if (!confirmingAction) return;
+    const timeout = window.setTimeout(() => setConfirmingAction(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [confirmingAction]);
   const avatar = (
     <span
       className={cn(
@@ -1237,15 +1289,19 @@ function ParticipantRow({
   // edge every time. `stacked` mode drops it — that layout's own second
   // line has nothing else sharing it to pin away from.
   const actions = canExpand && (
-    confirming ? (
+    confirmingAction ? (
       <span className={cn("flex shrink-0 items-center gap-1.5", !stacked && "ml-auto")}>
-        <span className="lyra-body-xs text-lyra-fg-secondary whitespace-nowrap">Drop?</span>
+        <span className="lyra-body-xs text-lyra-fg-secondary whitespace-nowrap">
+          {confirmingAction === "drop" ? "Drop?" : "Transfer?"}
+        </span>
         <button
           type="button"
-          aria-label={`Confirm drop ${label}`}
+          aria-label={confirmingAction === "drop" ? `Confirm drop ${label}` : `Confirm transfer to ${label}`}
           onClick={() => {
-            setConfirming(false);
-            onHangUp?.();
+            const action = confirmingAction;
+            setConfirmingAction(null);
+            if (action === "drop") onHangUp?.();
+            else onTransfer?.();
           }}
           className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-status-critical-strong hover:bg-lyra-state-hover"
         >
@@ -1254,7 +1310,7 @@ function ParticipantRow({
         <button
           type="button"
           aria-label="Cancel"
-          onClick={() => setConfirming(false)}
+          onClick={() => setConfirmingAction(null)}
           className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
         >
           <X className="h-4 w-4" strokeWidth={2} />
@@ -1281,7 +1337,7 @@ function ParticipantRow({
             type="button"
             title={`Transfer call to ${label}`}
             aria-label={`Transfer call to ${label}`}
-            onClick={onTransfer}
+            onClick={() => setConfirmingAction("transfer")}
             className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
           >
             <TransferIcon />
@@ -1292,7 +1348,7 @@ function ParticipantRow({
             type="button"
             title={`Drop ${label}`}
             aria-label={`Drop ${label}`}
-            onClick={() => setConfirming(true)}
+            onClick={() => setConfirmingAction("drop")}
             className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-status-critical-strong hover:bg-lyra-state-hover"
           >
             <PhoneOff className="h-4 w-4" strokeWidth={2} />
@@ -1330,6 +1386,20 @@ export interface VoiceCallControlsProps {
    *  "Closed" from the status popover). The only real, non-decorative
    *  action in this whole bar — see this file's own top doc comment. */
   onHangUp: () => void;
+  /** Fires once a transfer actually completes — cold transfer straight from
+   *  the Consult/Transfer picker (`ConferencePicker`'s own Transfer icon),
+   *  finalizing an active consult via `ConsultCard`'s Transfer button, or
+   *  transferring to a colleague already merged into the conference
+   *  (`ParticipantRow`'s roster Transfer icon). All three end THIS agent's
+   *  own leg exactly like `onHangUp` does (see each handler's own doc
+   *  comment for why they reuse `handleEndForEveryone`) — this fires
+   *  alongside that, not instead of it, so a caller can show its own
+   *  "Transferred to {name}" confirmation (a toast) distinct from the
+   *  "Call Ended" one `onHangUp` already drives. Per explicit request ("add
+   *  a confirmation when an interaction is transferred: toast would be
+   *  appropriate"). Optional so an existing caller that hasn't wired this
+   *  yet still renders exactly as before, just without that toast. */
+  onTransferComplete?: (name: string) => void;
   /** Seconds since this call started (`clockTick - Thread.startTick`, same
    *  tick source every other timer in this app reads off) — rendered as a
    *  running "MM:SS" (`formatElapsedTime`, same format/helper
@@ -1348,6 +1418,26 @@ export interface VoiceCallControlsProps {
    *  control bar"). Omit (or while `onHold` is false) to show the plain
    *  "Hold"/"Resume" label exactly as before. */
   heldElapsedSeconds?: number;
+  /** Seconds since the CUSTOMER was put on hold during a conference — the
+   *  exact parallel of `heldElapsedSeconds` above, just for `customerOnHold`
+   *  instead of the agent's own hold. Per explicit follow-up request ("when
+   *  in a conference, show the hold timer for customer or agent is on
+   *  hold"): `customerOnHold` is local-only state this bar invented for the
+   *  conference roster split (see that field's own doc comment), so unlike
+   *  self-hold it has no page-level timestamp of its own unless a caller
+   *  tracks one — a caller does so the same way it already tracks
+   *  `heldSinceTick` for self-hold, via `onCustomerHoldChange` below. Omit
+   *  (or while `customerOnHold` is false) to show no duration for the
+   *  customer's own hold, same "optional, falls back to no timer" contract
+   *  `heldElapsedSeconds` already has. */
+  customerHeldElapsedSeconds?: number;
+  /** Fires every time `customerOnHold` flips — pairs with
+   *  `customerHeldElapsedSeconds` just above exactly the way `onHoldChange`
+   *  already pairs with `heldElapsedSeconds` for self-hold. Optional so an
+   *  existing caller that hasn't wired this through yet just doesn't get a
+   *  customer-hold timer (the red line itself still shows correctly while
+   *  self-held, same as before this prop existed). */
+  onCustomerHoldChange?: (next: boolean) => void;
   /**
    * Opens/closes the small draggable video window (a `DraggablePanel`) the
    * caller renders elsewhere in the page — replaces this button's old
@@ -1653,8 +1743,11 @@ const lastBouncedColleagueCountByCallInstance = new Map<string, number>();
 
 export function VoiceCallControls({
   onHangUp,
+  onTransferComplete,
   elapsedSeconds,
   heldElapsedSeconds,
+  customerHeldElapsedSeconds,
+  onCustomerHoldChange,
   onToggleVideo,
   videoOpen,
   onHold: onHoldControlled,
@@ -1803,6 +1896,32 @@ export function VoiceCallControls({
   // them under — that hold existed only so they wouldn't overhear the
   // private consult, and ends the moment the consult does.
   const [customerOnHold, setCustomerOnHold] = useState(false);
+  // Reports every `customerOnHold` flip up to the caller — per explicit
+  // follow-up request ("when in a conference, show the hold timer for
+  // customer or agent is on hold"): the red hold-timer line below used to
+  // only ever read `heldElapsedSeconds`, a prop driven entirely by the
+  // PAGE's own `Thread.heldSinceTick` (set from `onHoldChange`, i.e. only
+  // ever self-hold once `isConference`) — `customerOnHold` itself never
+  // had an elapsed duration of its own to show, since it's local-only
+  // state this bar invented for the roster split (see this field's own
+  // doc comment just above) with no page-level timestamp backing it.
+  // `customerHeldElapsedSeconds` (this file's own `VoiceCallControlsProps`
+  // doc comment) is the parallel prop a caller computes the exact same way
+  // `heldElapsedSeconds` already is, from a new, equally parallel
+  // `Thread.customerHeldSinceTick`. Wraps every `setCustomerOnHold` call
+  // site (not just one) so this can never drift out of sync with the real
+  // state.
+  const updateCustomerOnHold = (next: boolean) => {
+    setCustomerOnHold(next);
+    onCustomerHoldChange?.(next);
+  };
+  // The exact parallel of `heldElapsedLabel` (computed earlier, above), for
+  // the CUSTOMER's own hold instead — see `customerHeldElapsedSeconds`'s
+  // own doc comment.
+  const customerHeldElapsedLabel =
+    customerOnHold && customerHeldElapsedSeconds !== undefined
+      ? formatElapsedTime(customerHeldElapsedSeconds)
+      : undefined;
   // Whether the AGENT is currently self-held (only meaningful once
   // `isConference` — see that const's own doc comment). Per explicit
   // direction ("lock down most controls... Mute/Keypad/Consult/Add Video
@@ -1943,6 +2062,24 @@ export function VoiceCallControls({
   // UI state, same "no need to survive a remount" reasoning the old
   // `ConsultBanner`'s own `conferenceExpanded` used to follow.
   const [rosterExpanded, setRosterExpanded] = useState(false);
+  // Which colleague row (if any) just landed via a merge — per explicit
+  // follow-up request ("if a consult is merged I like auto-opening the list
+  // to show all of the controls, and animating the newly added
+  // participant"). Confirmed the collapsed-during-consult behavior above
+  // stays as-is; this only covers the MOMENT a consult turns into a real
+  // conference member (`handleMergeConsult`, below), which both expands
+  // the roster AND sets this so that one row's own entrance can be called
+  // out from the rest of a roster that's otherwise all appearing at once
+  // (it was collapsed going into the merge). Auto-clears after a few
+  // seconds, same "flip a flag, auto-revert" idiom this file's own
+  // confirm states already use — this is a one-shot entrance cue, not a
+  // persistent highlight.
+  const [recentlyMergedColleagueId, setRecentlyMergedColleagueId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!recentlyMergedColleagueId) return;
+    const timeout = window.setTimeout(() => setRecentlyMergedColleagueId(null), 2000);
+    return () => window.clearTimeout(timeout);
+  }, [recentlyMergedColleagueId]);
 
   // Per explicit request ("when end call is clicked transition the end
   // call button to a hanging up state (disabled) then disable the other
@@ -2126,13 +2263,23 @@ export function VoiceCallControls({
     // conference un-held, exactly like every other colleague entry
     // already does (`isOnHold: false`, right below), until the agent
     // deliberately holds someone afterward.
-    setCustomerOnHold(false);
+    updateCustomerOnHold(false);
     setColleagues((prev) => [
       ...prev,
       { id: consult.id, name: consult.name, isOnHold: false, isInternalAgent: consult.isInternalAgent },
     ]);
     setConsult(undefined);
     setOnHold(false);
+    // Per explicit follow-up request ("if a consult is merged I like
+    // auto-opening the list to show all of the controls, and animating the
+    // newly added participant") — the roster stayed deliberately collapsed
+    // for the DURATION of the consult (per this bar's own "keep things
+    // simpler" rule, confirmed as still wanted), but a merge is the moment
+    // that private side-conversation becomes a real, visible conference
+    // member — worth surfacing immediately rather than leaving the agent to
+    // notice (or go looking for) it.
+    setRosterExpanded(true);
+    setRecentlyMergedColleagueId(consult.id);
   };
   // Transfer — per explicit request ("a user can toggle between an agent or
   // skill and customer. Show a transfer icon next to the agent/skill so
@@ -2146,7 +2293,10 @@ export function VoiceCallControls({
   // site) purely so it reads as its own named action, same convention every
   // other consult/colleague handler on this bar already follows.
   const handleTransferConsult = () => {
+    if (!consult) return;
+    const name = consult.name;
     handleEndForEveryone();
+    onTransferComplete?.(name);
   };
   // Drop — ported from the reference app's `dropVoiceCallColleague`. Only
   // ever fired from `ParticipantChip`'s own Check/X confirm step, never
@@ -2162,15 +2312,32 @@ export function VoiceCallControls({
   const handleToggleColleagueHold = (colleagueId: string) => {
     setColleagues((prev) => prev.map((c) => (c.id === colleagueId ? { ...c, isOnHold: !c.isOnHold } : c)));
   };
-  // Decorative no-op — per explicit follow-up request ("remove all of the
-  // notifications that trigger upon any action"), this used to just fire
-  // a "not wired up yet" toast; there's no real transfer flow in this
-  // prototype to do instead, so clicking Transfer on a merged colleague
-  // now genuinely does nothing, same as `ConferencePicker`'s own
-  // Chat/Transfer icons above. Kept as its own named handler (not inlined
-  // at the `ParticipantChip` call site) so the control stays wired/visibly
-  // present rather than silently dropped.
-  const handleTransferColleague = () => {};
+  // Transfer to an already-merged colleague — per explicit follow-up
+  // request ("after an agent is added to a conference, the customer can be
+  // transferred from that point to the agent that's in the conference").
+  // Used to be a decorative no-op (an earlier explicit request, "remove all
+  // of the notifications that trigger upon any action," had stripped its
+  // placeholder toast with nothing real to do instead) — now reuses the
+  // exact same "this agent's own leg is done" ending `handleTransferConsult`
+  // already established, just triggered from the roster's own Transfer icon
+  // (`ParticipantRow`'s onTransfer, below) instead of the active-consult
+  // card's.
+  const handleTransferColleague = (colleague: CallColleague) => {
+    handleEndForEveryone();
+    onTransferComplete?.(colleague.name);
+  };
+  // Cold transfer — per explicit follow-up request ("the consult popup
+  // includes the option to 'cold transfer' right to another agent or
+  // skill"): `ConferencePicker`'s own per-row Transfer icon used to be
+  // fully decorative (no `onClick` at all) — this hands the customer
+  // straight to whoever was picked WITHOUT ever starting a consult first,
+  // same "this agent's own leg is done" ending every other Transfer action
+  // on this bar already uses.
+  const handleColdTransfer = (person: ConferencePickerPerson) => {
+    setConferenceOpen(false);
+    handleEndForEveryone();
+    onTransferComplete?.(person.name);
+  };
   // Per explicit follow-up request ("look at ... Microsoft Teams and other
   // similar apps for how a user can end a group call, or choose to leave
   // it"): Teams gives its organizer a plain "Leave" by default with "End
@@ -2187,6 +2354,19 @@ export function VoiceCallControls({
   // reference apps' own identical gating.
   const showLeaveChoice = colleagues.length > 0 || !!mergedInteractions?.length;
   const [endCallMenuOpen, setEndCallMenuOpen] = useState(false);
+  // Inline "Confirm End Call?" — per explicit request ("any end call should
+  // have a confirmation step"), only for the plain 1:1 single-click path
+  // below: once `showLeaveChoice` is true, opening `EndCallChoiceMenu` and
+  // then picking "Leave"/"End Call for Everyone" is already its own
+  // two-step confirmation, so this doesn't layer a second one on top of
+  // that. Same lightweight flip-the-label-for-a-few-seconds pattern used
+  // everywhere else this request touched, not a popover.
+  const [confirmingEndCall, setConfirmingEndCall] = useState(false);
+  useEffect(() => {
+    if (!confirmingEndCall) return;
+    const timeout = window.setTimeout(() => setConfirmingEndCall(false), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [confirmingEndCall]);
   // Which option was actually picked from `EndCallChoiceMenu` — purely so
   // the animated-exit label below (`endingLabel`) can say "Leaving..."
   // instead of "Hanging Up..."/"Ending All Calls..." when that's what's
@@ -2290,14 +2470,19 @@ export function VoiceCallControls({
     endAction === "leave" ? "Leaving..." : mergedInteractions?.length ? "Ending All Calls..." : "Hanging Up...";
   // The End Call button's own click handler — opens `EndCallChoiceMenu`
   // instead of hanging up directly once there's an actual choice to make
-  // (`showLeaveChoice`); otherwise behaves exactly as today, a single click
-  // straight into `handleEndForEveryone`'s animated exit.
+  // (`showLeaveChoice`); otherwise arms `confirmingEndCall`, which swaps the
+  // ENTIRE control for an explicit "End call?" + Check/X confirm (below) —
+  // per explicit follow-up ("I find the confirmation to end a call
+  // confusing and not noticeable. Don't realize I need to click the same
+  // icon twice"), a first pass that just relabeled the same button in place
+  // wasn't noticeable enough. Only the Check button actually calls
+  // `handleEndForEveryone`.
   const handleEndCallButtonClick = () => {
     if (showLeaveChoice) {
       setEndCallMenuOpen((open) => !open);
-    } else {
-      handleEndForEveryone();
+      return;
     }
+    setConfirmingEndCall(true);
   };
 
   // Conference/Merged-call tags — pulled out into one shared fragment (same
@@ -2500,6 +2685,60 @@ export function VoiceCallControls({
           opens, so every detail below renders/behaves exactly as it always
           has for that case; only a Conference/Merge Calls party's click
           now opens `EndCallChoiceMenu` instead of hanging up directly. */}
+      {confirmingEndCall ? (
+        // Explicit "End call?" + Check/X — same established idiom this
+        // file's own Drop/Transfer confirms already use (`ParticipantRow`'s
+        // `confirmingAction`, `ConferencePicker`'s `confirmingTransferId`),
+        // reused here instead of a same-button relabel per the explicit
+        // follow-up above. Replaces the WHOLE End Call control (every
+        // `controlsIconOnly`/`showLeaveChoice` variant below) rather than
+        // threading a confirm state into each of those four separately —
+        // only the plain 1:1 path (`!showLeaveChoice`) ever arms this, see
+        // `handleEndCallButtonClick`.
+        <span
+          className={cn(
+            "flex shrink-0 items-center gap-1.5",
+            // `embedded` — per explicit follow-up request/screenshot ("I
+            // find the placement of the end call confirmation odd in the
+            // 'within tile' setting. try pinning to the right of the
+            // tile"): this whole fragment is shared across every host
+            // (`mergeTrailingIntoCluster && trailingButtons`, above, folds
+            // it into the same wrapping row as Hold/Mask/Record/Keypad/
+            // Consult) — the within-tile card is narrow enough that this
+            // confirm almost always wraps onto its own line below those,
+            // where it read as stranded at the row's LEFT edge (the
+            // wrapping row's default start alignment) rather than reading
+            // as the End Call control's own replacement. `w-full
+            // justify-end` only for the embedded/within-tile host — the
+            // wide bottom bar and the compact left-nav rail (both already
+            // narrow/tight by design, see `mergeTrailingIntoCluster`'s own
+            // doc comment) weren't the ones flagged and keep their
+            // existing left-started layout.
+            embedded && "w-full justify-end"
+          )}
+        >
+          <span className="lyra-body-sm whitespace-nowrap text-lyra-status-critical-strong">End call?</span>
+          <button
+            type="button"
+            aria-label="Confirm end call"
+            onClick={() => {
+              setConfirmingEndCall(false);
+              handleEndForEveryone();
+            }}
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-lyra-status-critical-subtle text-lyra-status-critical-strong hover:bg-lyra-state-hover"
+          >
+            <Check className="h-5 w-5" strokeWidth={2} />
+          </button>
+          <button
+            type="button"
+            aria-label="Cancel"
+            onClick={() => setConfirmingEndCall(false)}
+            className="flex h-9 w-9 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
+          >
+            <X className="h-5 w-5" strokeWidth={2} />
+          </button>
+        </span>
+      ) : (
       <Popover
         open={showLeaveChoice && endCallMenuOpen}
         onOpenChange={setEndCallMenuOpen}
@@ -2659,6 +2898,7 @@ export function VoiceCallControls({
           </Button>
         )}
       </Popover>
+      )}
     </>
   );
 
@@ -2935,22 +3175,44 @@ export function VoiceCallControls({
               call-duration line above, in the same red
               (`text-lyra-status-critical-strong`) this app's whole "on
               hold" color language now uses (`OnHoldPill`/`ParticipantChip`/
-              this bar's own Hold/Resume button). Reuses the label text
-              `OnHoldPill` already showed ("On Hold · MM:SS") rather than a
-              bare number on its own, so this reads the same wherever an
-              agent sees it. */}
-          {onHold && heldElapsedLabel && (
-            <span className="lyra-body-xs text-lyra-status-critical-strong">
-              {/* "You're on hold" once a real conference exists — this line
-                  (and the button driving it) no longer means the customer
-                  is on hold at that point, see `isConference`'s own doc
-                  comment. Reuses this exact same line/placement rather than
-                  a new element — per explicit direction ("reuse that same
-                  red line, relabeled"). */}
-              {isConference ? "You're on hold" : "On Hold"} ·{" "}
-              <span className="tabular-nums">{heldElapsedLabel}</span>
-            </span>
-          )}
+              this bar's own Hold/Resume button).
+
+              Per three later explicit follow-ups: (1) "change the 'you're
+              on hold' text just to say 'hold'" — this used to read "You're
+              on hold" once `isConference`/plain "On Hold" otherwise; briefly
+              became always just "Hold". (2) "when in a conference, show the
+              hold timer for customer or agent is on hold" — this line used
+              to gate purely on `onHold` (self-hold once `isConference`), so
+              a held CUSTOMER with the agent still on the line showed no
+              timer at all. `activeHoldLabel`/`activeHoldText` below pick
+              whichever of the two is actually active (self-hold takes
+              priority in the rare case both are somehow true at once — see
+              `customerHeldElapsedLabel`'s own doc comment) — pre-conference
+              this is unchanged, since `onHold` IS the customer's own hold at
+              that point. (3) "return the 'you're on hold' text if only the
+              agent is on hold in a conference" — plain "Hold" turned out to
+              UNDER-explain the self-hold case specifically (the one case
+              where "who, exactly, is on hold" genuinely isn't obvious from
+              context the way it is everywhere else): self-hold during a
+              conference goes back to "You're on hold"; every other case
+              (pre-conference, or the CUSTOMER held during a conference)
+              stays the plain "Hold" (2) already settled on. */}
+          {(() => {
+            const selfHeldInConference = onHold && isConference;
+            const activeHoldLabel = onHold
+              ? heldElapsedLabel
+              : isConference && customerOnHold
+                ? customerHeldElapsedLabel
+                : undefined;
+            return (
+              activeHoldLabel && (
+                <span className="lyra-body-xs text-lyra-status-critical-strong">
+                  {selfHeldInConference ? "You're on hold" : "Hold"} ·{" "}
+                  <span className="tabular-nums">{activeHoldLabel}</span>
+                </span>
+              )
+            );
+          })()}
           {/* Rail-only placement — see `conferenceTags`'s own doc comment
               (near its definition, above the return statement) for the
               full "why". `showLeaveChoice` is the same underlying
@@ -3066,15 +3328,28 @@ export function VoiceCallControls({
               accounts for, so removing just the color keeps every other
               spacing/wrap measurement in this row unchanged. */}
           <span aria-hidden="true" className="h-4 w-px shrink-0 self-center" />
-          {/* No more wrapping `Tooltip` on this or the next several
-              controls — per later explicit follow-up request ("label the
-              buttons again"), `WideCallControlButton`'s own label is now
-              always-visible text, so a hover-only tooltip repeating the
-              same word would be pure redundancy. The one exception is
-              Record just below, which still wraps a `Tooltip` — its hover
-              content is genuinely EXTRA information ("why is this
-              disabled") beyond what a two-word label can hold. */}
-          {controlsCompact ? (
+          {/* `mainHoldOn` — per a confirmed usability finding ("some agents
+              clicking easily on the main hold icon to hold only
+              themselves, others thought surely they were putting the
+              customer on hold... a critique that the hold behavior
+              changes when in a conference and maybe shouldn't"): this
+              button used to silently swap WHAT it held (the customer,
+              then — once `isConference` — the agent instead) with no
+              visual signal that its own meaning had just changed. It now
+              ALWAYS means "hold the customer," full stop, matching its
+              own label/icon regardless of conference state — self-hold
+              moved onto the "You" roster row instead (that row's own doc
+              comment, above, has the other half of this fix), which is
+              where testers already expected it (every OTHER participant
+              already has their own Hold icon right next to their name).
+              Mid-consult is the one exception: `handleSwapConsult` already
+              owns this button there (added for a separate, earlier
+              usability finding — unaffected by this one). */}
+          {(() => {
+            const mainHoldOn = consult ? onHold : isConference ? customerOnHold : onHold;
+            const mainHoldClick = () =>
+              consult ? handleSwapConsult() : isConference ? updateCustomerOnHold(!customerOnHold) : setOnHold(!onHold);
+            return controlsCompact ? (
             // No more `· MM:SS` suffix on "Resume" — per explicit follow-up
             // request ("remove the Resume timer in the voice control/hold
             // component. Simply list a hold timer in red under the normal
@@ -3083,59 +3358,49 @@ export function VoiceCallControls({
             // new red hold-timer line in the identity column instead (see
             // that span's own doc comment, right after the main elapsed-
             // time span above).
-            <Tooltip content={onHold ? "Resume" : "Hold"} placement="top">
+            <Tooltip content={mainHoldOn ? "Resume" : "Hold"} placement="top">
               <CompactCallControlButton
-                icon={onHold ? <Play className="h-5 w-5" strokeWidth={1.5} /> : <Pause className="h-5 w-5" strokeWidth={1.5} />}
-                active={onHold}
-                aria-label={onHold ? "Resume" : "Hold"}
+                icon={mainHoldOn ? <Play className="h-5 w-5" strokeWidth={1.5} /> : <Pause className="h-5 w-5" strokeWidth={1.5} />}
+                active={mainHoldOn}
+                aria-label={mainHoldOn ? "Resume" : "Hold"}
                 // Red (critical), not amber (warning) — per explicit follow-up
                 // request ("change the hold color from its current color to
                 // a red color") — matches `ParticipantChip`'s own per-
                 // participant hold icon, which already used critical-red for
                 // this exact state.
                 className={
-                  onHold
+                  mainHoldOn
                     ? "text-lyra-status-critical-strong bg-lyra-status-critical-subtle hover:text-lyra-status-critical-strong"
                     : undefined
                 }
-                onClick={() => setOnHold(!onHold)}
-                // Disabled during a consult too — `ConsultBanner`'s own
-                // two per-party Hold buttons own hold-toggling for that
-                // duration (they have to flip the customer's AND the
-                // consult leg's hold in lockstep, which this button
-                // doesn't know about). Also disabled once this call is
-                // bridged into a merged call (`mergedInteractions`) —
-                // holding one leg of a merge has no clear meaning once two
-                // independent customers are actually on the same bridge
-                // (see that prop's own doc comment).
-                disabled={isEnding || !!consult || !!mergedInteractions?.length}
+                onClick={mainHoldClick}
+                // Still disabled once this call is bridged into a merged
+                // call (`mergedInteractions`) — holding one leg of a merge
+                // has no clear meaning once two independent customers are
+                // actually on the same bridge (see that prop's own doc
+                // comment).
+                disabled={isEnding || !!mergedInteractions?.length}
               />
             </Tooltip>
           ) : (
             <WideCallControlButton
-              icon={onHold ? <Play className="h-5 w-5" strokeWidth={1.5} /> : <Pause className="h-5 w-5" strokeWidth={1.5} />}
+              icon={mainHoldOn ? <Play className="h-5 w-5" strokeWidth={1.5} /> : <Pause className="h-5 w-5" strokeWidth={1.5} />}
               // No more `· MM:SS` suffix — see the compact variant's own
               // identical comment just above.
-              label={onHold ? "Resume" : "Hold"}
-              active={onHold}
+              label={mainHoldOn ? "Resume" : "Hold"}
+              active={mainHoldOn}
               // Red (critical), not amber (warning) — see the compact
               // variant's own identical comment just above.
               className={
-                onHold
+                mainHoldOn
                   ? "text-lyra-status-critical-strong bg-lyra-status-critical-subtle hover:text-lyra-status-critical-strong"
                   : undefined
               }
-              // Per a confirmed bug report ("clicking on the main hold
-              // button when in a conference puts everyone on hold. This
-              // behavior is not needed and should not do that"): no more
-              // cascading `setColleagues` here — see `isConference`'s own
-              // doc comment, above, for what this button means NOW instead
-              // once a real conference exists (the agent's own self-hold,
-              // not "hold everyone").
-              onClick={() => setOnHold(!onHold)}
-              disabled={isEnding || !!consult || !!mergedInteractions?.length}
+              onClick={mainHoldClick}
+              disabled={isEnding || !!mergedInteractions?.length}
             />
-          )}
+          );
+          })()}
           {controlsCompact ? (
             <Tooltip content="Mask" placement="top">
               <CompactCallControlButton
@@ -3427,6 +3692,7 @@ export function VoiceCallControls({
                     : undefined
                 }
                 skillOptions={skillOptions}
+                onTransfer={handleColdTransfer}
               />
             }
           >
@@ -3572,7 +3838,39 @@ export function VoiceCallControls({
               const rosterInteractive = !consult;
               const showMerged = !!mergedInteractions?.length;
               const chips: { key: string; node: React.ReactNode }[] = [
-                { key: "you", node: <ParticipantRow label="You" isSelf isOnHold={false} /> },
+                {
+                  key: "you",
+                  node: (
+                    // Self-hold's own control, now LIVE here — per a
+                    // confirmed usability finding ("some agents clicking
+                    // easily on the main hold icon to hold only
+                    // themselves, others thought surely they were putting
+                    // the customer on hold... other testers tried to find
+                    // the hold next to their own avatar in the participant
+                    // lists to put only themselves on hold"). This row
+                    // used to be static (`isOnHold={false}`, no toggle at
+                    // all) — self-hold lived ONLY on the main bar's own
+                    // Hold button once `isConference`, with no visual
+                    // signal that the SAME button had just started meaning
+                    // something different than it did a moment ago. Moving
+                    // it here instead means "Hold" the main button, the
+                    // customer's own roster row, and this row are now each
+                    // doing exactly what their position already implies —
+                    // see the main button's own doc comment for the other
+                    // half of this fix. Only interactive once `isConference`
+                    // (self-hold has no real meaning for a Merge Calls
+                    // bridge with no actual colleague — see `isSelfHeld`'s
+                    // own doc comment) and never mid-consult (same
+                    // `rosterInteractive` gate every other row's own
+                    // controls already use).
+                    <ParticipantRow
+                      label="You"
+                      isSelf
+                      isOnHold={isSelfHeld}
+                      onToggleHold={rosterInteractive && isConference ? () => setOnHold(!onHold) : undefined}
+                    />
+                  ),
+                },
                 {
                   key: "customer",
                   node: (
@@ -3591,15 +3889,28 @@ export function VoiceCallControls({
                     // alone, no actual colleagues) — unchanged there, and
                     // that main button stays disabled in that case anyway
                     // (`mergedInteractions?.length` in its own `disabled`).
+                    // Per explicit follow-up request/usability finding
+                    // ("testing showed users wanting to click the
+                    // customer's hold/resume button in order to switch
+                    // between customer and agent consult ... only one can
+                    // be active at a time during a consult so clicking
+                    // consult hold, or customer hold will change the
+                    // other"): this row's hold button used to be disabled
+                    // outright during a consult (`rosterInteractive`
+                    // false). It's now a SECOND entry point into the exact
+                    // same swap `ConsultCard`'s own hold button already
+                    // drives (`handleSwapConsult`) — clicking either one
+                    // flips which of the two is held, both always agree,
+                    // since both just read/write the one shared `onHold`.
                     <ParticipantRow
                       label={customerLabel ?? "Customer"}
-                      isOnHold={isConference ? customerOnHold : onHold}
+                      isOnHold={consult ? onHold : isConference ? customerOnHold : onHold}
                       onToggleHold={
-                        rosterInteractive
-                          ? isConference
-                            ? () => setCustomerOnHold(!customerOnHold)
+                        consult
+                          ? handleSwapConsult
+                          : isConference
+                            ? () => updateCustomerOnHold(!customerOnHold)
                             : () => setOnHold(!onHold)
-                          : undefined
                       }
                     />
                   ),
@@ -3611,6 +3922,21 @@ export function VoiceCallControls({
                       label={colleague.name}
                       kind="colleague"
                       isInternalAgent={colleague.isInternalAgent ?? true}
+                      // Calls out the row that just landed via a merge — see
+                      // `recentlyMergedColleagueId`'s own doc comment. A
+                      // plain mount-in animation wouldn't distinguish this
+                      // row from any other: the roster was COLLAPSED going
+                      // into the merge (`handleMergeConsult` also expands
+                      // it), so every row mounts at the same instant the
+                      // disclosure opens, new colleague included — a brief
+                      // highlight tint + pulse is what actually sets this
+                      // ONE row apart from the rest, auto-clearing itself
+                      // once `recentlyMergedColleagueId` resets.
+                      className={
+                        colleague.id === recentlyMergedColleagueId
+                          ? "animate-pulse bg-lyra-status-success-subtle"
+                          : undefined
+                      }
                       // Read-only peek (mid-consult): every row shares the
                       // SAME current hold state as the customer (`onHold`),
                       // not each colleague's own `isOnHold` — see this
@@ -3626,7 +3952,9 @@ export function VoiceCallControls({
                       // including the dialpad outbound shows only the hold
                       // or hangup icons").
                       onTransfer={
-                        rosterInteractive && (colleague.isInternalAgent ?? true) ? handleTransferColleague : undefined
+                        rosterInteractive && (colleague.isInternalAgent ?? true)
+                          ? () => handleTransferColleague(colleague)
+                          : undefined
                       }
                       onHangUp={rosterInteractive ? () => handleDropColleague(colleague.id) : undefined}
                     />

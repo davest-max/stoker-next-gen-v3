@@ -301,6 +301,7 @@ import {
   Check,
   Mail,
   PhoneOff,
+  PhoneForwarded,
   type LucideIcon,
 } from "lucide-react";
 
@@ -2122,6 +2123,18 @@ export function AgentWorkspace2WithDeskPage({
   // interaction (see that const's own doc comment). Mirrors Agent Workspace
   // 2.0's identical `outcomeDraftSource` union (AgentNextGenPage.tsx).
   const [outcomeDraftSource, setOutcomeDraftSource] = useState<"leftnav" | "transcript" | "tab" | "header" | null>(null);
+  // Which interaction the popover currently named by `outcomeDraftKey` is
+  // actually FOR — per explicit request ("when the outcome pop up is
+  // triggered, and the save and close button is clicked, dismiss and
+  // remove the entire interaction"): `handleOutcomeSave` needs a real
+  // interaction id to dismiss, and `outcomeDraftKey` itself
+  // (`${interaction.id}:${channelKey}`) can't be split back apart to
+  // recover one reliably — a seeded interaction id can itself contain a
+  // colon (e.g. `"test-seed:nathan-cole"`), so naively splitting on `:`
+  // would silently grab the wrong, truncated id. Tracked as its own piece
+  // of state instead, set alongside `outcomeDraftKey`/`outcomeDraftSource`
+  // every time `handleOutcomeOpenChange` opens a popover.
+  const [outcomeDraftInteractionId, setOutcomeDraftInteractionId] = useState<string | null>(null);
   const buildDefaultOutcomeDraft = () => ({
     tags: ["Technical", "Account"],
     dispositionCode: OUTCOME_DISPOSITION_OPTIONS[0].value,
@@ -2176,7 +2189,12 @@ export function AgentWorkspace2WithDeskPage({
    *  reads as "real" from then on and can even show up as a possible
    *  match for a LATER unrelated unknown contact. */
   const [createdCustomerRecords, setCreatedCustomerRecords] = useState<CreateNewCustomerRecord[]>([]);
-  const handleOutcomeOpenChange = (key: string, open: boolean, source: "leftnav" | "transcript" | "tab" | "header") => {
+  const handleOutcomeOpenChange = (
+    key: string,
+    open: boolean,
+    source: "leftnav" | "transcript" | "tab" | "header",
+    interactionId: string
+  ) => {
     if (open) {
       // Reset to a fresh draft every time a (possibly different) channel's
       // popover opens — no real backend here to load a previously-saved
@@ -2185,22 +2203,34 @@ export function AgentWorkspace2WithDeskPage({
       setOutcomeDraft(buildDefaultOutcomeDraft());
       setOutcomeDraftKey(key);
       setOutcomeDraftSource(source);
+      setOutcomeDraftInteractionId(interactionId);
     } else if (outcomeDraftKey === key && outcomeDraftSource === source) {
       setOutcomeDraftKey(null);
       setOutcomeDraftSource(null);
+      setOutcomeDraftInteractionId(null);
     }
   };
-  // "Approve & Save"/"Cancel" both just close the popover — there's no real
-  // backend here to persist an outcome to, same no-op placeholder state
-  // every other not-yet-wired action in this file starts from (e.g. Consult
-  // / Transfer — see rule #30's own note in CLAUDE.md).
+  // "Save & Close" — per explicit request ("when the outcome pop up is
+  // triggered, and the save and close button is clicked, dismiss and
+  // remove the entire interaction"): completing an outcome IS the agent
+  // declaring this contact done, so it now reuses the exact same removal
+  // `handleDismissInteraction` already performs for "Unassign & Dismiss"
+  // (logs to Contact History, then drops the interaction) rather than just
+  // closing the popover with no further effect, which is all this used to
+  // do (there's no real backend here to persist the outcome FIELDS
+  // themselves to either way — only what happens to the interaction
+  // afterward changed).
   const handleOutcomeSave = () => {
+    const interactionId = outcomeDraftInteractionId;
     setOutcomeDraftKey(null);
     setOutcomeDraftSource(null);
+    setOutcomeDraftInteractionId(null);
+    if (interactionId) handleDismissInteraction(interactionId);
   };
   const handleOutcomeCancel = () => {
     setOutcomeDraftKey(null);
     setOutcomeDraftSource(null);
+    setOutcomeDraftInteractionId(null);
   };
   // Formerly drove the record header's own icon-button-cluster Outcome
   // popover and status chip (Consult/Transfer, Outcome, kebab, status
@@ -7678,6 +7708,28 @@ export function AgentWorkspace2WithDeskPage({
             )
           );
         }}
+        // Exact parallel of `heldElapsedSeconds`/`onHoldChange` just above,
+        // for the customer's own hold during a conference — see
+        // `Thread.customerHeldSinceTick`'s own doc comment.
+        customerHeldElapsedSeconds={
+          thread.customerHeldSinceTick !== undefined ? clockTick - thread.customerHeldSinceTick : undefined
+        }
+        onCustomerHoldChange={(next) => {
+          setInteractions((prev) =>
+            prev.map((i) =>
+              i.id === interaction.id
+                ? {
+                    ...i,
+                    threads: i.threads.map((c) =>
+                      c.id === thread.id
+                        ? { ...c, customerHeldSinceTick: next ? clockTick : undefined }
+                        : c
+                    ),
+                  }
+                : i
+            )
+          );
+        }}
         // Per explicit follow-up request ("show all participant names
         // in the assignment card also with a similar 'conference'
         // icon") — mirrors `onHoldChange` just above exactly, onto
@@ -7720,6 +7772,31 @@ export function AgentWorkspace2WithDeskPage({
             icon: PhoneOff,
             title: "Call Ended",
             message: `Your call with ${interactionDisplayName(interaction)} has ended.`,
+            duration: 5000,
+          });
+          // Per explicit request ("when an interaction is ended ... the
+          // outcomes popup should auto-trigger to open for the agent to
+          // complete") — scoped to voice for now per explicit follow-up
+          // ("keep it specific to voice channels"). Reuses the exact same
+          // Outcome popover every other Outcome entry point already opens
+          // (`handleOutcomeOpenChange`, rule #31.8) — `${interaction.id}:voice`
+          // matches `outcomeKey`'s own `${interaction.id}:${c.id ?? c.type}`
+          // formula below, since every voice `Thread` is seeded/created with
+          // a literal `id: "voice"` (never falls back to `c.type`).
+          handleOutcomeOpenChange(`${interaction.id}:voice`, true, "leftnav", interaction.id);
+        }}
+        onTransferComplete={(name) => {
+          // Per explicit request ("add a confirmation when an interaction
+          // is transferred: toast would be appropriate") — fires alongside
+          // (not instead of) the "Call Ended" toast above, since a
+          // completed transfer also genuinely ends this agent's own leg
+          // (`onHangUp` fires too) — these are two different, both-true
+          // facts about the same moment.
+          addToast({
+            variant: "success",
+            icon: PhoneForwarded,
+            title: "Call Transferred",
+            message: `Your call with ${interactionDisplayName(interaction)} has been transferred to ${name}.`,
             duration: 5000,
           });
         }}
@@ -8698,7 +8775,7 @@ export function AgentWorkspace2WithDeskPage({
                     // with it) there.
                     outcome: {
                       open: outcomeDraftKey === outcomeKey && outcomeDraftSource === "leftnav",
-                      onOpenChange: (open: boolean) => handleOutcomeOpenChange(outcomeKey, open, "leftnav"),
+                      onOpenChange: (open: boolean) => handleOutcomeOpenChange(outcomeKey, open, "leftnav", interaction.id),
                       // Same options list AND same underlying value as the
                       // session-status pill's own dropdown
                       // (`TranscriptSessionSeparator`, fed by THIS channel's
@@ -10017,7 +10094,7 @@ export function AgentWorkspace2WithDeskPage({
                                     removeVariant={isNewOutboundThread ? "delete-draft" : "close"}
                                     outcome={{
                                       open: outcomeDraftKey === outcomeKey && outcomeDraftSource === "tab",
-                                      onOpenChange: (open) => handleOutcomeOpenChange(outcomeKey, open, "tab"),
+                                      onOpenChange: (open) => handleOutcomeOpenChange(outcomeKey, open, "tab", activeInteraction.id),
                                       resolutionOptions: TRANSCRIPT_SESSION_STATUS_OPTIONS,
                                       resolution: activeInteraction.threadStatuses?.[c.id] ?? "Open",
                                       onResolutionChange: (value) =>
@@ -10426,7 +10503,7 @@ export function AgentWorkspace2WithDeskPage({
                           // call site uses) — see `InteractionTranscript`'s
                           // own outcome props' doc comment.
                           outcomeOpen={outcomeDraftKey === activeChannelOutcomeKey && outcomeDraftSource === "transcript"}
-                          onOutcomeOpenChange={(open) => handleOutcomeOpenChange(activeChannelOutcomeKey!, open, "transcript")}
+                          onOutcomeOpenChange={(open) => handleOutcomeOpenChange(activeChannelOutcomeKey!, open, "transcript", activeInteraction.id)}
                           outcomeTags={outcomeDraft.tags}
                           onOutcomeTagsChange={(tags) => setOutcomeDraft((d) => ({ ...d, tags }))}
                           outcomeDispositionCode={outcomeDraft.dispositionCode}

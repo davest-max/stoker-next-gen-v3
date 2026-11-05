@@ -257,6 +257,18 @@ export interface Thread {
    *  each page's own LeftNav `channels` builder) — see `backgroundedSinceTick`
    *  just below for that other case's own, now-tracked "since when" moment. */
   heldSinceTick?: number;
+  /** The exact parallel of `heldSinceTick` just above, for the CUSTOMER's
+   *  own hold during a conference instead of the agent's — per explicit
+   *  follow-up request ("when in a conference, show the hold timer for
+   *  customer or agent is on hold"). Set/cleared by each page's own
+   *  `onCustomerHoldChange` handler passed to `VoiceCallControls`
+   *  (`VoiceCallControlsProps.onCustomerHoldChange`'s own doc comment has
+   *  the full "why" — `customerOnHold` is local-only state that bar
+   *  invented for the conference roster split, with no page-level
+   *  timestamp of its own until this field exists to hold one). Not read by
+   *  `channelOnHold`/`OnHoldPill` the way `heldSinceTick` is — those badges
+   *  are a separate, pre-existing surface this task didn't touch. */
+  customerHeldSinceTick?: number;
   /** The `clockTick` value at the moment this thread's own interaction most
    *  recently STOPPED being the active one — the implicit-hold counterpart
    *  to `heldSinceTick` just above, per a later explicit follow-up request
