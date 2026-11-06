@@ -2492,6 +2492,7 @@ export function InteractionTranscript({
   onOutcomeSummaryChange,
   onOutcomeSave,
   onOutcomeCancel,
+  onOutcomeSaveAndRedial,
   onDismissChannel,
   dimmed,
   showSessionActionCluster = true,
@@ -2753,6 +2754,10 @@ export function InteractionTranscript({
   onOutcomeSummaryChange?: (value: string) => void;
   onOutcomeSave?: () => void;
   onOutcomeCancel?: () => void;
+  /** "Save and Redial" — see `ChannelOutcomeConfig.onSaveAndRedial`'s own
+   *  doc comment (outcome-panel.tsx). Omit for a non-voice channel; the
+   *  button itself only renders when this is actually supplied. */
+  onOutcomeSaveAndRedial?: ChannelOutcomeConfig["onSaveAndRedial"];
   /**
    * Real "Unassign & Dismiss" button on the CURRENT session's own separator
    * bar, immediately right of the status tag — per explicit request. Same
@@ -3807,6 +3812,7 @@ export function InteractionTranscript({
                           onSummaryChange: onOutcomeSummaryChange!,
                           onSave: onOutcomeSave!,
                           onCancel: onOutcomeCancel!,
+                          onSaveAndRedial: onOutcomeSaveAndRedial,
                         }
                       : undefined
                   }

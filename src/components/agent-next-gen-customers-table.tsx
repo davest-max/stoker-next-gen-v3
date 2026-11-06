@@ -90,6 +90,17 @@ export interface CustomerListRecord {
   lastName: string;
   group: string;
   firstPhone: string;
+  /** Every number on file for this customer, each labeled by type
+   *  ("Mobile"/"Home"/"Work") — same passthrough of `CreateNewCustomer-
+   *  Record.phones` the outbound picker's own "Select Phone" dropdown
+   *  already uses. Per explicit follow-up request ("the phone numbers
+   *  listed in the customer phone dropdown should identify type... that
+   *  relates to the Customers tab in the dashboard also") — `firstPhone`
+   *  above stays the table's own primary/display number unchanged; this is
+   *  what lets its cell (`CUSTOMER_PHONE_COLUMN_KEY`'s own render branch,
+   *  below) prefix it with that number's real type instead of showing a
+   *  bare, unlabeled string. */
+  phones: { label: string; value: string }[];
   emailAddress: string;
   address1: string;
   city: string;
@@ -112,6 +123,7 @@ export const CUSTOMER_LIST_RECORDS: CustomerListRecord[] = CREATE_NEW_CUSTOMERS.
   lastName: c.lastName,
   group: c.group,
   firstPhone: c.firstPhone,
+  phones: c.phones,
   emailAddress: c.emailAddress,
   address1: c.address1,
   city: c.city,
@@ -149,7 +161,12 @@ export type CustomerColKey =
  *  `CustomerColKey` on purpose: the "+ Filter" menu can filter on fields
  *  (e.g. Original customer ID, Date of birth, Agent, Agent team, Payment
  *  balance) that aren't rendered as their own table column. */
-export type CustomerFilterKey = Exclude<keyof CustomerListRecord, "channels">;
+// `"phones"` excluded alongside `"channels"` — same reasoning: an array
+// value, not a plain string, so it can't go through the same `includes()`
+// string-equality filter check every other field uses. Added once `phones`
+// joined `CustomerListRecord` (see that field's own doc comment) for the
+// Customers tab's own type-labeled phone display.
+export type CustomerFilterKey = Exclude<keyof CustomerListRecord, "channels" | "phones">;
 
 // Fixed left-to-right channel order the hover flyout renders in — only
 // channels the row's own `channels` array actually includes are shown
@@ -207,9 +224,27 @@ export function customerChannelAddress(row: CustomerListRecord, channel: Channel
  *  "WhatsApp handles," which was the bug this whole function got rewritten
  *  to fix. */
 export function addressOptionsForChannel(row: CustomerListRecord, channel: ChannelType): { value: string; label: string }[] {
+  if (channel === "email" || channel === "whatsapp") {
+    const own = customerChannelAddress(row, channel);
+    return own.value ? [{ value: own.value, label: own.value }] : [];
+  }
+  // Per explicit follow-up request ("I'm not seeing the label plus phone
+  // number in many of the 'Select Phone' dropdown instances"): `row.phones`
+  // is this same customer's own real, type-labeled numbers ("Mobile"/
+  // "Home"/"Work" — the exact field the Customers table's own "First
+  // Phone" column already shows a type-prefixed value from). A real
+  // customer always has at least one entry here, so this replaces the old
+  // bare `row.firstPhone` + generic shared-pool fallback outright for
+  // voice/sms — that fallback is still what a hand-authored fixture with
+  // no real `phones` array gets (shouldn't happen for a directory record,
+  // but keeps this from ever returning nothing).
+  // Combine each entry's type label with its own number ("Home (200)
+  // 234-1232") so the Select actually shows both, per explicit follow-up
+  // ("still not seeing phone numbers alongside the label") — `row.phones`
+  // on its own only carries the bare type as `label`.
+  if (row.phones.length > 0) return row.phones.map((p) => ({ value: p.value, label: `${p.label} ${p.value}` }));
   const own = customerChannelAddress(row, channel);
   const options = own.value ? [{ value: own.value, label: own.value }] : [];
-  if (channel === "email" || channel === "whatsapp") return options;
   for (const opt of OUTBOUND_CONFIG.phoneOptions) {
     if (!options.some((o) => o.value === opt.value)) options.push(opt);
   }
@@ -433,6 +468,8 @@ export function CustomerChannelPopoverButton({
   alwaysVisible = false,
   overlay = false,
   size = "sm",
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
 }: {
   row: CustomerListRecord;
   channel: ChannelType;
@@ -474,8 +511,26 @@ export function CustomerChannelPopoverButton({
    *  own per-row hover icons, `CustomerChannelStack`'s overlay) is
    *  unaffected. */
   size?: "xs" | "sm";
+  /** Controlled open state — pass this (with `onOpenChange`) when this
+   *  button is rendered alongside sibling channel buttons for the SAME row
+   *  (`CustomerChannelCell`/`CustomerChannelStack`/`CustomerAddChannelButton`'s
+   *  wide mode), so only one of that row's popovers can be open at a time.
+   *  Per explicit bug report ("I can open the phone and whatsapp on top of
+   *  each other. only one at a time should be open") — this component used
+   *  to always own an independent local `open` state regardless of
+   *  context, which is exactly what let two sibling icons' popovers open
+   *  simultaneously; the doc comment above this component claiming each
+   *  icon "is never rendered alongside a sibling from the same row" was
+   *  simply wrong for every one of those three call sites. Omitted (the
+   *  default), this falls back to the old uncontrolled local state —
+   *  there's currently no consumer that still wants that, but it keeps
+   *  this component usable standalone. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = controlledOnOpenChange ?? setUncontrolledOpen;
   const meta = CHANNEL_ICON_META[channel];
   return (
     <CustomerChannelPicker
@@ -540,10 +595,14 @@ export function CustomerChannelPopoverButton({
  *
  *  Every button here opens its own independent `CustomerChannelPicker`
  *  popover instance, all sharing one `openChannel` piece of state (only one
- *  can meaningfully be open at a time) rather than each owning a disconnected
- *  copy the way `CustomerChannelPopoverButton`'s own per-row icons do (there,
- *  each icon lives in a different table row and is never rendered alongside
- *  a sibling from the same row, so that concern doesn't apply). */
+ *  can meaningfully be open at a time) — `CustomerChannelPopoverButton`'s
+ *  own per-row icons (`CustomerChannelCell`/`CustomerChannelStack`) now do
+ *  the exact same thing via its `open`/`onOpenChange` controlled props; a
+ *  prior version of this doc comment claimed those never need it because
+ *  each icon "is never rendered alongside a sibling from the same row,"
+ *  which was simply wrong — both of those DO render one icon per row per
+ *  channel, and a real bug (two sibling popovers open at once) shipped
+ *  before this was caught. */
 export function CustomerAddChannelButton({
   row,
   isNarrow,
@@ -655,6 +714,8 @@ export function CustomerAddChannelButton({
             // `size="sm"` swap just above: matches the Customer Overview
             // card's `size="sm"` Edit button sitting in the same row.
             size="xs"
+            open={openChannel === channel}
+            onOpenChange={(open) => setOpenChannel(open ? channel : null)}
           />
         )
       )}
@@ -679,6 +740,12 @@ export function CustomerChannelCell({
   onStartInteraction: (contact: CreateNewOutboundContact, channel: ChannelType, phone: string, skillId: string) => void;
 }) {
   const available = CUSTOMER_CHANNEL_ORDER.filter((c) => row.channels.includes(c));
+  // Shared across every icon in this row — per explicit bug report ("I can
+  // open the phone and whatsapp on top of each other"), each icon used to
+  // own its own independent open state, letting two siblings' popovers be
+  // open at once. See `CustomerChannelPopoverButton`'s own `open`/
+  // `onOpenChange` doc comment.
+  const [openChannel, setOpenChannel] = useState<ChannelType | null>(null);
   if (available.length === 0) {
     return <span className="lyra-body-sm text-lyra-fg-disabled">—</span>;
   }
@@ -691,6 +758,8 @@ export function CustomerChannelCell({
           channel={c}
           available={available}
           onStartInteraction={onStartInteraction}
+          open={openChannel === c}
+          onOpenChange={(open) => setOpenChannel(open ? c : null)}
         />
       ))}
     </div>
@@ -746,6 +815,9 @@ export function CustomerChannelStack({
   onStartInteraction: (contact: CreateNewOutboundContact, channel: ChannelType, phone: string, skillId: string) => void;
 }) {
   const available = CUSTOMER_CHANNEL_ORDER.filter((c) => row.channels.includes(c));
+  // Shared across every icon in this stack — same "only one popover open
+  // at a time" fix as `CustomerChannelCell`'s own `openChannel` state.
+  const [openChannel, setOpenChannel] = useState<ChannelType | null>(null);
   if (available.length === 0) {
     return null;
   }
@@ -789,6 +861,8 @@ export function CustomerChannelStack({
           available={available}
           onStartInteraction={onStartInteraction}
           overlay
+          open={openChannel === c}
+          onOpenChange={(open) => setOpenChannel(open ? c : null)}
         />
       ))}
     </div>
@@ -1216,6 +1290,20 @@ export function CustomersListView({
                   >
                     {key === "channels" ? (
                       <CustomerChannelCell row={row} onStartInteraction={onStartInteraction} />
+                    ) : key === "firstPhone" ? (
+                      // Per explicit follow-up request ("the phone numbers
+                      // listed in the customer phone dropdown should
+                      // identify type: home, mobile, work, etc. That
+                      // relates to the Customers tab in the dashboard
+                      // also") — prefixes this row's own primary number
+                      // with its real type, same `phones[0].label` every
+                      // outbound "Select Phone" dropdown already shows for
+                      // it, instead of a bare, unlabeled string. Falls back
+                      // to the plain number when a row has no `phones`
+                      // entry at all (shouldn't happen for a real directory
+                      // record, but keeps this from crashing on one that
+                      // doesn't).
+                      row.phones[0]?.label ? `${row.phones[0].label} ${row.firstPhone}` : row.firstPhone
                     ) : (
                       row[key]
                     )}

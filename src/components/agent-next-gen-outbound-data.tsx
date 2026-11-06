@@ -221,6 +221,18 @@ export const OUTBOUND_CUSTOMERS: NonNullable<CreateNewOutboundConfig["groups"][n
   // `function` declarations further down this file, hoisted, so they're
   // callable up here despite being defined later.
   primaryPhone: { value: synthesizePhone(hashSeed(c.customerId || c.name)), label: synthesizePhone(hashSeed(c.customerId || c.name)) },
+  // Per explicit follow-up request ("I'm not seeing the label plus phone
+  // number in many of the 'Select Phone' dropdown instances"): `c.phones`
+  // is this SAME customer's own real, type-labeled numbers (lyra-ui's
+  // `CreateNewCustomerRecord.phones` — "Mobile"/"Home"/"Work", already used
+  // this same way for Contact History's own redial picker). Passed through
+  // as `phoneOptions` so "Select Phone" shows these labeled, real numbers
+  // instead of the synthesized `primaryPhone` above (kept unchanged — it
+  // still backs the Customer Information panel's own "Phone #", a separate
+  // surface this doesn't touch) plus the generic caller-ID pool. See
+  // `CreateNewOutboundContact.phoneOptions`'s own doc comment (create-new
+  // .tsx) for the full priority order.
+  phoneOptions: c.phones,
   // Matches `buildCustomerInfoFields`'s own synthesized "Email" fallback
   // exactly (same `splitCustomerName` + `${first}.${last}@example.com`
   // formula) — so Favorites' "Enter phone, email or search term" search

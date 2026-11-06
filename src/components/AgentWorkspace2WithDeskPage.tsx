@@ -255,6 +255,7 @@ import {
   buildTransferHandoffInteraction,
 } from "@/components/agent-next-gen-transfer-handoff-scenario";
 import { TransferHistoryCard } from "@/components/agent-next-gen-transfer-history-card";
+import { SkillConsultTransferSuggestionCard } from "@/components/agent-next-gen-skill-suggestion-card";
 import appIcon from "@/assets/app-icon.svg";
 import {
   MessageSquare,
@@ -1657,10 +1658,47 @@ const TEST_SEED_CONFERENCE_CALL: Interaction = {
   ],
   currentThreadId: "voice",
 };
+// Per explicit request ("the transcript shows the conversation talking
+// about getting help from another skill, AI could then offer to contact
+// the skill to create a consult. Or to choose a cold transfer"). Same
+// "one hand-authored scenario" approach `MarcusWebbNextBestActionCard`
+// already established for its own AI Next Best Action card
+// (AgentWorkspaceAdvancedPage.tsx) — there's no real transcript analysis in
+// this prototype (this call's own voice channel still shows the same
+// "Coming Soon Voice Content" placeholder every other voice call does, per
+// rule #27 — see AgentWorkspace2WithDeskPage.tsx's own CLAUDE.md), so the
+// "AI noticed this" signal lives in the Autosummary text instead, the one
+// surface this app already treats as "what the AI picked up from the
+// conversation."
+// `SKILL_SUGGESTION_ID` keys the `customerContextOverviewInfo` override
+// below that swaps the plain-sentence Next Best Action for the real
+// `SkillConsultTransferSuggestionCard` (near that override).
+const SKILL_SUGGESTION_ID = "test-seed:sofia-ramirez";
+const TEST_SEED_SKILL_SUGGESTION_CALL: Interaction = {
+  id: SKILL_SUGGESTION_ID,
+  interactionId: generateInteractionId(),
+  customerName: "Sofia Ramirez",
+  customerId: generateCaseId(),
+  threads: [
+    {
+      id: "voice",
+      type: "voice",
+      startTick: -340,
+      preview: OUTBOUND_CONFIG.skillOptions.find((s: { value: string }) => s.value === "billing")?.label,
+      value: "(919) 555-0121",
+      addressLabel: "(919) 555-0121",
+      contactId: generateContactId(),
+      direction: "outbound",
+      backgroundedSinceTick: -20,
+    },
+  ],
+  currentThreadId: "voice",
+};
 const TEST_SEED_INTERACTIONS: Interaction[] = [
   TEST_SEED_PLAIN_CALL_1,
   TEST_SEED_PLAIN_CALL_2,
   TEST_SEED_CONFERENCE_CALL,
+  TEST_SEED_SKILL_SUGGESTION_CALL,
 ];
 
 export function AgentWorkspace2WithDeskPage({
@@ -2232,6 +2270,71 @@ export function AgentWorkspace2WithDeskPage({
     setOutcomeDraftSource(null);
     setOutcomeDraftInteractionId(null);
   };
+  // "Save and Redial" — per explicit request ("a call was dropped or ended
+  // by mistake and the agent needs a place to call back immediately. This
+  // then is a new outbound to this customer and a skill selection is
+  // necessary"), reworked per a later explicit follow-up ("I'd like the
+  // customer name, phone, skill and redial button just to appear within
+  // the same outcome popup. Keep the user in the same place and not have
+  // to jump around"). An earlier version of this closed the Outcome
+  // popover and opened a SEPARATE Dial Pad popover elsewhere the instant
+  // "Save and Redial" was clicked — even once correctly anchored (a prior
+  // fix for a related bug), that was still a different popover appearing
+  // in a different place, exactly the "reorient and chase it down" problem
+  // being solved here. The inline redial view now lives entirely INSIDE
+  // the Outcome popover itself (`ChannelOutcomeConfig.onSaveAndRedial`'s
+  // own doc comment, outcome-panel.tsx) — this just supplies the data
+  // (customer name, number, skill options/default, resolved from
+  // `voiceThread.preview`, the skill LABEL `Thread` actually stores —
+  // there's no raw skill id on `Thread` itself to read directly) and the
+  // one real commit action. `onDial` only ever fires once the agent clicks
+  // "Dial Number" INSIDE that inline view — by then the popover is the
+  // only thing left open, so dismissing the old interaction and launching
+  // the new call via `handleQuickDial` directly (no separate Dial Pad
+  // popover needed anymore at all) is safe to do in the same breath.
+  // Voice-only — returns `undefined` for anything else, which omits the
+  // "Save and Redial" button/view entirely (see that same doc comment for
+  // why a caller should never wire this for a non-voice channel).
+  const buildOutcomeSaveAndRedialConfig = (interactionId: string): ChannelOutcomeConfig["onSaveAndRedial"] => {
+    const interaction = interactions.find((i) => i.id === interactionId);
+    const voiceThread = interaction?.threads.find((t) => t.type === "voice");
+    if (!interaction || !voiceThread) return undefined;
+    const defaultSkillId = OUTBOUND_CONFIG.skillOptions.find(
+      (s: { value: string; label: string }) => s.label === voiceThread.preview
+    )?.value;
+    // Per explicit follow-up request ("the phone number can have multiple
+    // phone numbers for the customer in the dropdown, in case the agent
+    // needs to try a different number"): a plain name match against the
+    // same customer directory `handleRedialButtonClick`'s own Contact
+    // History redial already checks (`customerDirectoryPool`) — this
+    // interaction's own `customerId` is a synthesized CASE id
+    // (`generateCaseId()`), not a real directory id, so name is the only
+    // link available here. `undefined` (no match) correctly falls through
+    // to the inline view's own free-text `PhoneInput` fallback — see
+    // `ChannelOutcomeConfig.onSaveAndRedial.phoneOptions`'s own doc comment
+    // (outcome-panel.tsx).
+    const matchedCustomer = customerDirectoryPool.find(
+      (c) => c.name.toLowerCase() === interaction.customerName?.toLowerCase()
+    );
+    return {
+      customerName: interaction.customerName,
+      phoneNumber: voiceThread.value ?? voiceThread.addressLabel ?? "",
+      phoneOptions: matchedCustomer?.phones,
+      skillOptions: OUTBOUND_CONFIG.skillOptions,
+      defaultSkillId,
+      onDial: (phoneNumber: string, skillId: string) => {
+        setOutcomeDraftKey(null);
+        setOutcomeDraftSource(null);
+        setOutcomeDraftInteractionId(null);
+        handleDismissInteraction(interaction.id);
+        // `interaction.customerName` — per explicit follow-up request ("if
+        // the customer name is known it should show the customer name in
+        // the assignment tile not the phone number") — see
+        // `handleQuickDial`'s own `knownCustomerName` doc comment.
+        handleQuickDial(phoneNumber, skillId, interaction.customerName);
+      },
+    };
+  };
   // Formerly drove the record header's own icon-button-cluster Outcome
   // popover and status chip (Consult/Transfer, Outcome, kebab, status
   // chip) — that header cluster no longer exists (see the channel-
@@ -2785,6 +2888,41 @@ export function AgentWorkspace2WithDeskPage({
         transferHistoryContent: (
           <TransferHistoryCard summary={TRANSFER_HANDOFF_SUMMARY} priorAgents={TRANSFER_HANDOFF_PRIOR_AGENTS} />
         ),
+      };
+    }
+    // Skill Consult/Transfer suggestion demo scenario — see
+    // `SKILL_SUGGESTION_ID`'s own doc comment (above, near
+    // `TEST_SEED_SKILL_SUGGESTION_CALL`). `snapshot` is this app's own
+    // "what the AI picked up from the conversation" surface (no real
+    // transcript analysis exists here), so that's where the detected
+    // mention lives; `nextBestActionContent`/`nextBestActionBare` swap the
+    // plain-sentence Next Best Action for the real, wired suggestion card —
+    // same override mechanism (and the same reason to use it: "a genuinely
+    // actionable decision, not a static sentence") the Marcus Webb card
+    // established for `ContactOverview` (AgentWorkspaceAdvancedPage.tsx).
+    if (activeInteraction.id === SKILL_SUGGESTION_ID) {
+      return {
+        ...base,
+        snapshot: [
+          "Customer called in on Billing about a duplicate charge, already resolved.",
+          "Partway through, she mentioned her account dashboard has been throwing a login error for a few days — outside Billing's own scope.",
+        ],
+        nextBestActionContent: (
+          <SkillConsultTransferSuggestionCard
+            skillLabel="Technical Support"
+            // Per explicit follow-up request ("if ai-assist panel is
+            // active and shows these action buttons, go straight to
+            // consult with skill") — no picker UI at all, see
+            // `consultSkillRequest`'s own doc comment just above.
+            onConsult={() => setConsultSkillRequest("Technical Support")}
+            // Cold transfer has no equivalent "skip the picker" entry
+            // point yet (transferring still needs the Skills tab's own
+            // per-row Transfer icon) — unchanged, still just opens the
+            // real picker so the agent can do it in one more click.
+            onTransfer={() => setConferenceOpen(true)}
+          />
+        ),
+        nextBestActionBare: true,
       };
     }
     return base;
@@ -3595,6 +3733,13 @@ export function AgentWorkspace2WithDeskPage({
   // plain local `useState` inside the bar alone can't be reached from the
   // record header, so this one boolean is shared at the page level instead.
   const [conferenceOpen, setConferenceOpen] = useState(false);
+  // Per explicit follow-up request ("if ai-assist panel is active and
+  // shows these action buttons, go straight to consult with skill") — see
+  // `VoiceCallControlsProps.consultSkillRequest`'s own doc comment
+  // (agent-next-gen-voice-call-controls.tsx) for the full mechanism. Only
+  // ever set by the Skill Consult/Transfer suggestion card's own "Consult
+  // with {skill}" button (`SKILL_SUGGESTION_ID`'s branch, above).
+  const [consultSkillRequest, setConsultSkillRequest] = useState<string | null>(null);
   // Where the Consult popover anchors — per explicit request ("show the
   // consult popup next to that selection, so a user doesn't have to jump
   // away from where they just clicked"). Set right before opening from
@@ -4077,9 +4222,14 @@ export function AgentWorkspace2WithDeskPage({
      History entries have no such backing database). */
   const [dialpadRequest, setDialpadRequest] = useState<{
     phoneNumber: string;
-    anchorEl?: HTMLElement | null;
+    // A real DOM node, or a frozen `{ getBoundingClientRect }` — see
+    // `handleOutcomeSaveAndRedial`'s own doc comment for why the latter
+    // exists (`Popover.virtualAnchorRef`'s doc comment, popover.tsx, has
+    // the general mechanism).
+    anchorEl?: HTMLElement | { getBoundingClientRect: () => DOMRect } | null;
     customerName?: string;
     phoneOptions?: { value: string; label: string }[];
+    defaultSkillId?: string;
   } | null>(null);
   const [redialEntry, setRedialEntry] = useState<ContactHistoryEntry | null>(null);
 
@@ -5102,7 +5252,16 @@ export function AgentWorkspace2WithDeskPage({
     return () => document.removeEventListener("click", onDocumentClick);
   }, []);
 
-  const handleQuickDial = (phoneNumber: string, skillId: string) => {
+  // `knownCustomerName` — per explicit follow-up request ("if the customer
+  // name is known it should show the customer name in the assignment tile
+  // not the phone number"): "Save and Redial" (`buildOutcomeSaveAndRedial-
+  // Config`'s own `onDial`, above) already knows exactly who this is — the
+  // SAME customer the just-ended interaction belonged to — so it passes
+  // that name through here instead of falling back to the generic "no
+  // contact record, show the number" behavior every OTHER caller of this
+  // function still correctly gets (a genuinely unidentified quick-dialed
+  // number really has no better name to show).
+  const handleQuickDial = (phoneNumber: string, skillId: string, knownCustomerName?: string) => {
     // No contact record for a quick-dialed number — key the card off the
     // number itself so redialing the same number restarts its card rather
     // than stacking up duplicates.
@@ -5160,7 +5319,7 @@ export function AgentWorkspace2WithDeskPage({
       // to "Customer" once a second channel joins the card — see
       // `interactionDisplayName`'s own doc comment further down — so this
       // still only ever shows on a still-single-channel card.)
-      if (idx === -1) return [...prev, { id, interactionId, customerName: phoneNumber, customerId: generateCaseId(), threads: [newChannel], currentThreadId: newChannel.id, startedFresh: true }];
+      if (idx === -1) return [...prev, { id, interactionId, customerName: knownCustomerName ?? phoneNumber, customerId: generateCaseId(), threads: [newChannel], currentThreadId: newChannel.id, startedFresh: true }];
       // `threads: [newChannel]` wholesale-replaces every previous channel
       // with this one fresh "voice" channel, so `threadStatuses`/
       // `liveMessages` are reset entirely too (rather than selectively
@@ -5176,7 +5335,15 @@ export function AgentWorkspace2WithDeskPage({
       // type-gated reset.
       return prev.map((interaction, i) =>
         i === idx
-          ? { ...interaction, threads: [newChannel], currentThreadId: newChannel.id, threadStatuses: undefined, liveMessages: undefined, voiceCallEnded: undefined }
+          ? {
+              ...interaction,
+              customerName: knownCustomerName ?? interaction.customerName,
+              threads: [newChannel],
+              currentThreadId: newChannel.id,
+              threadStatuses: undefined,
+              liveMessages: undefined,
+              voiceCallEnded: undefined,
+            }
           : interaction
       );
     });
@@ -7687,6 +7854,8 @@ export function AgentWorkspace2WithDeskPage({
         className={extraClassName}
         conferenceOpen={conferenceOpen}
         onConferenceOpenChange={handleConferenceOpenChange}
+        consultSkillRequest={interaction.id === SKILL_SUGGESTION_ID ? consultSkillRequest : null}
+        onConsultSkillRequestHandled={() => setConsultSkillRequest(null)}
         consultAnchorRef={consultAnchorRef}
         onHold={thread.heldByAgent}
         heldElapsedSeconds={
@@ -8810,6 +8979,10 @@ export function AgentWorkspace2WithDeskPage({
                       onSummaryChange: (value: string) => setOutcomeDraft((d) => ({ ...d, summary: value })),
                       onSave: handleOutcomeSave,
                       onCancel: handleOutcomeCancel,
+                      // Voice-only — see `ChannelOutcomeConfig.onSaveAndRedial`'s
+                      // own doc comment (outcome-panel.tsx).
+                      onSaveAndRedial:
+                        c.type === "voice" ? buildOutcomeSaveAndRedialConfig(interaction.id) : undefined,
                     } satisfies ChannelOutcomeConfig,
                   };
                 });
@@ -10109,6 +10282,8 @@ export function AgentWorkspace2WithDeskPage({
                                       onSummaryChange: (value) => setOutcomeDraft((d) => ({ ...d, summary: value })),
                                       onSave: handleOutcomeSave,
                                       onCancel: handleOutcomeCancel,
+                                      onSaveAndRedial:
+                                        c.type === "voice" ? buildOutcomeSaveAndRedialConfig(activeInteraction.id) : undefined,
                                     } satisfies ChannelOutcomeConfig}
                                   />
                                 );
@@ -10512,6 +10687,11 @@ export function AgentWorkspace2WithDeskPage({
                           onOutcomeSummaryChange={(value) => setOutcomeDraft((d) => ({ ...d, summary: value }))}
                           onOutcomeSave={handleOutcomeSave}
                           onOutcomeCancel={handleOutcomeCancel}
+                          onOutcomeSaveAndRedial={
+                            activeChannel?.type === "voice"
+                              ? buildOutcomeSaveAndRedialConfig(activeInteraction.id)
+                              : undefined
+                          }
                           // Same dismiss logic `ChannelTab`'s own kebab
                           // "Unassign & Dismiss" entry uses for this exact
                           // channel — dismiss just the channel while others
@@ -11217,6 +11397,35 @@ export function AgentWorkspace2WithDeskPage({
                     // panel" glyph as this panel's sibling instance above,
                     // instead of `ContainerHeader`'s generic default `X`.
                     closeIcon={<PanelRightClose className="h-5 w-5" strokeWidth={1.5} aria-hidden="true" />}
+                    // Redial, right next to the customer's own name — per a
+                    // confirmed usability finding ("testing showed test
+                    // participants struggling to find a 'redial' function
+                    // ... Redial should also be available in the Contact
+                    // History panel by the customer name"): this used to be
+                    // ONLY a footer button below the full transcript/body
+                    // (still is, see `footer` below), easy to miss on a
+                    // longer entry without scrolling all the way down. A
+                    // second entry point right in the header — next to the
+                    // name it's calling back, visible the instant this
+                    // panel opens — fires the exact same
+                    // `handleRedialButtonClick`, not a separate action.
+                    // Voice-only (`entry.redial`), same gating the footer
+                    // button already uses.
+                    headerActions={
+                      selectedContactHistoryEntry?.redial ? (
+                        <Button
+                          variant="icon"
+                          size="icon-sm"
+                          title="Redial"
+                          aria-label={`Redial ${selectedContactHistoryEntry.name}`}
+                          onClick={(e: React.MouseEvent<HTMLButtonElement>) =>
+                            handleRedialButtonClick(selectedContactHistoryEntry, e.currentTarget)
+                          }
+                        >
+                          <PhoneOutgoing className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
+                        </Button>
+                      ) : undefined
+                    }
                     // Redial/Re-open — per explicit request, these now live
                     // here (the summary panel) instead of directly on the
                     // Contact History row. Mutually exclusive by channel

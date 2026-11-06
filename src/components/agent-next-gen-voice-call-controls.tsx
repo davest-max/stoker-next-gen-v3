@@ -1400,6 +1400,21 @@ export interface VoiceCallControlsProps {
    *  appropriate"). Optional so an existing caller that hasn't wired this
    *  yet still renders exactly as before, just without that toast. */
   onTransferComplete?: (name: string) => void;
+  /** Starts a consult with this SKILL (by name, e.g. `"Technical Support"`
+   *  — matched against `CONFERENCE_SKILLS`' own `name`) immediately, with
+   *  no picker UI at all — per explicit request ("if ai-assist panel is
+   *  active and shows these action buttons, go straight to consult with
+   *  skill"): the AI Next Best Action suggestion card already names the
+   *  exact skill it's suggesting, so routing the agent through the
+   *  Consult/Transfer picker to find and click that SAME skill a second
+   *  time is pure friction, not a real decision point. Fires once
+   *  (`onConsultSkillRequestHandled` acknowledges it — this component
+   *  can't clear its own prop) the moment it's set to a real, matching
+   *  skill name; an unrecognized name or `null`/`undefined` does nothing.
+   *  Optional — an existing caller that's never wired this through is
+   *  completely unaffected. */
+  consultSkillRequest?: string | null;
+  onConsultSkillRequestHandled?: () => void;
   /** Seconds since this call started (`clockTick - Thread.startTick`, same
    *  tick source every other timer in this app reads off) — rendered as a
    *  running "MM:SS" (`formatElapsedTime`, same format/helper
@@ -1744,6 +1759,8 @@ const lastBouncedColleagueCountByCallInstance = new Map<string, number>();
 export function VoiceCallControls({
   onHangUp,
   onTransferComplete,
+  consultSkillRequest,
+  onConsultSkillRequestHandled,
   elapsedSeconds,
   heldElapsedSeconds,
   customerHeldElapsedSeconds,
@@ -2216,6 +2233,52 @@ export function VoiceCallControls({
     const raf = requestAnimationFrame(() => setCollapseHeight(0));
     return () => cancelAnimationFrame(raf);
   }, [isExiting]);
+  // Starting a consult — extracted out of `ConferencePicker`'s own
+  // `onSelect` prop (its call site, below) so an EXTERNAL caller can start
+  // the exact same consult without going through that picker's UI at all —
+  // see `consultSkillRequest`'s own doc comment (`VoiceCallControlsProps`)
+  // for the concrete case this exists for ("AI next best action" suggesting
+  // a specific skill; per explicit follow-up, "if ai-assist panel is
+  // active and shows these action buttons, go straight to consult with
+  // skill" — clicking one shouldn't dump the agent into the picker to
+  // find and click that same skill a second time).
+  const handleConsultSelect = (person: ConferencePickerPerson) => {
+    setConferenceOpen(false);
+    setConsult({
+      id: person.id,
+      name: person.name,
+      isOnHold: false,
+      isInternalAgent: person.isInternalAgent,
+    });
+    setOnHold(true);
+    // See this same reasoning at the original call site below — force the
+    // roster disclosure closed the moment a NEW consult starts.
+    setRosterExpanded(false);
+  };
+  // Acts on `consultSkillRequest` the moment a caller sets it — matches
+  // against `CONFERENCE_SKILLS`' own `name` (case-insensitive, since a
+  // caller is passing a human label like "Technical Support", not one of
+  // this file's own `skill-...` ids) and, if found, starts the consult
+  // immediately via `handleConsultSelect` exactly as if the agent had
+  // opened the picker, switched to Skills, and clicked it themselves. Does
+  // nothing while already consulting (`consult` truthy) — no real meaning
+  // to "start a second consult" over an existing one, and silently
+  // overwriting the agent's own in-progress one would be surprising.
+  // Always reports "handled" regardless of whether it actually matched or
+  // was skipped, same "the caller's own request state can't get stuck
+  // forever" convention `create-new.tsx`'s own `dialpadRequest` effect
+  // follows.
+  useEffect(() => {
+    if (!consultSkillRequest) return;
+    if (!consult) {
+      const skill = CONFERENCE_SKILLS.find(
+        (s) => s.name.toLowerCase() === consultSkillRequest.toLowerCase()
+      );
+      if (skill) handleConsultSelect(skill);
+    }
+    onConsultSkillRequestHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consultSkillRequest]);
   // Cancel — ported from the reference app's `startVoiceCallConsult`'s
   // cancel path: the private side-conversation is abandoned, and the
   // primary customer (auto-held the instant the consult started) resumes.
@@ -3661,27 +3724,7 @@ export function VoiceCallControls({
             bodyPadding={false}
             content={
               <ConferencePicker
-                onSelect={(person) => {
-                  setConferenceOpen(false);
-                  setConsult({
-                    id: person.id,
-                    name: person.name,
-                    isOnHold: false,
-                    isInternalAgent: person.isInternalAgent,
-                  });
-                  setOnHold(true);
-                  // Per explicit follow-up request ("have the participant
-                  // dropdown collapsed when in a consult. It helps keep
-                  // things simpler"): force the roster disclosure closed
-                  // the moment a NEW consult starts, regardless of
-                  // whatever expand state it was already in — an agent
-                  // who'd left the roster open while just managing the
-                  // plain conference shouldn't suddenly see it still open,
-                  // now additionally crowded by the new (read-only, per
-                  // the "entire conference is either on hold or not" rule)
-                  // peek content once a consult begins.
-                  setRosterExpanded(false);
-                }}
+                onSelect={handleConsultSelect}
                 joinableCall={joinableCall}
                 onJoinCall={
                   onJoinCall
@@ -4070,7 +4113,19 @@ export function VoiceCallControls({
                     className="flex w-full items-center gap-1.5 rounded-lyra-sm px-1 py-1 lyra-body-sm text-lyra-fg-secondary hover:bg-lyra-state-hover"
                   >
                     {avatarStack}
-                    {chips.length - 1} {chips.length - 1 === 1 ? "participant" : "participants"}
+                    {/* Per explicit bug report ("the participant count
+                        should include 'you' the agent. Visually the list
+                        looks like three people, which is correct. But the
+                        participant count says '2 participants'"): `chips`
+                        (right above) already includes "You" as its own
+                        row — this used to subtract 1 specifically to
+                        exclude it, matching the avatar-stack preview's own
+                        identical exclusion (`previewEntries`, above —
+                        intentionally left as-is: a small glanceable "who
+                        ELSE is on this call" preview is a different,
+                        reasonable thing to show than the actual headcount
+                        text this toggle reports). */}
+                    {chips.length} {chips.length === 1 ? "participant" : "participants"}
                     {/* Per explicit follow-up request ("the dropdown caret
                         in the conference participant list is not being
                         noticed... make that a bit larger and more
