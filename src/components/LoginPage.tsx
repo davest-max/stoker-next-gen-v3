@@ -1,7 +1,7 @@
 import { LoginCard } from "@nicecxone/lyra-ui";
 import { HIDE_BRANDING_FOR_TESTING } from "@/components/agent-next-gen-shared-utils";
 
-type Page = "agent-workspace" | "agent-advanced" | "outbound" | "login";
+type Page = "agent-workspace" | "agent-with-desk" | "outbound" | "login";
 
 interface LoginPageProps {
   onNavigate?: (page: Page) => void;
@@ -29,15 +29,14 @@ export function LoginPage({ onNavigate }: LoginPageProps) {
         // while the flag is on.
         appIcon={HIDE_BRANDING_FOR_TESTING ? <div className="h-5 w-5" aria-hidden="true" /> : undefined}
         launchButtonLabel="Launch"
-        // Per explicit request ("remove phase 1 for now ... completely
-        // delete the phase 1 files"): this used to launch straight into
-        // the old "agent" page (`AgentNextGenPage.tsx`), which is now
-        // deleted — repointed to `"agent-advanced"`
-        // (`AgentWorkspaceAdvancedPage.tsx`, now labeled "Agent Workspace
-        // 2.0 | Phase 1" in that page's own app menu, agent-next-gen-
-        // outbound-data.tsx's `buildAppMenuGroups`), the page that now
-        // actually IS "Phase 1".
-        onLaunch={() => onNavigate?.("agent-advanced")}
+        // Per explicit request ("remove Phase 1 ... remove the idea of
+        // Phases"): this used to launch straight into the old "agent" page
+        // (`AgentNextGenPage.tsx`), then later `"agent-advanced"`
+        // (`AgentWorkspaceAdvancedPage.tsx`) once that became deleted
+        // Phase 1's replacement — both are now gone, so this launches
+        // straight into `"agent-with-desk"` (`AgentWorkspace2WithDeskPage.tsx`),
+        // the one remaining Agent Workspace 2.0 page.
+        onLaunch={() => onNavigate?.("agent-with-desk")}
       />
     </div>
   );

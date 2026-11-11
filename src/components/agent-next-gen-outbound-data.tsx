@@ -99,36 +99,22 @@ function randomAvatarClassName(seed: string): string {
 
 /* ── App menu builder (needs onNavigate so built inside the component) ── */
 
-// Per explicit request ("remove phase 1 for now - it is old ... remove it
-// from the menu - rename the menu item Phase 1B to Phase 1 - completely
-// delete the phase 1 files"): the original "Agent Workspace 2.0 | Phase 1"
-// row (the plain `"agent"` page, `AgentNextGenPage.tsx`) is gone from this
-// menu entirely — not hidden, removed — and its page/component/file are
-// gone too (see App.tsx's own routing doc comment for the full "why").
-// "Agent Workspace 2.0 | Phase 1B" (`AgentWorkspaceAdvancedPage.tsx`, the
-// `"agent-advanced"` page — previously added back to this menu per an
-// earlier explicit request, positioned as the second item between the old
-// Phase 1 and Phase 2 since it was conceptually a variant of Phase 1) is
-// renamed to "Agent Workspace 2.0 | Phase 1" here — same underlying page/
-// component/route as before, only the label changed, and it's now this
-// menu's first/only-remaining "Phase 1" item since the original one is
-// gone. "Agent Workspace 2.0 Premium" (originally "Agent Workspace 2.0
-// With Desk", later renamed per an earlier explicit request — same
-// underlying page/component, just the label + route changed each time) is
-// still labeled "Agent Workspace 2.0 | Phase 2" — its own separate page
+// Per explicit request ("remove Phase 1 from this project ... remove the
+// idea of Phases"): this app no longer has a "Phase 1"/"Phase 2" split —
+// `AgentWorkspaceAdvancedPage.tsx` (the former "Phase 1" row, the
+// `"agent-advanced"` page) is deleted outright, along with its menu row,
+// and the one remaining Agent Workspace 2.0 page
 // (`AgentWorkspace2WithDeskPage.tsx`, its own `#/agent-premium` route,
-// App.tsx), untouched by this change.
+// App.tsx) drops the "| Phase 2" suffix since there's nothing left for it
+// to be distinguished from. See App.tsx's own routing doc comment for the
+// full history (an even older "Phase 1," `AgentNextGenPage.tsx`, was
+// already removed before this).
 //
-// `currentPage` decides which row shows the "active" (blue, non-clickable-
-// looking) treatment — each call site passes its OWN page literal
-// (`AgentWorkspace2WithDeskPage.tsx` passes `"agent-with-desk"`,
-// `AgentWorkspaceAdvancedPage.tsx` passes `"agent-advanced"`), since each
-// page component inherently knows which page it itself is; there's no need
-// to thread that back down from `App.tsx`. Every row still gets an
-// `onClick` (including the currently-active one, which just re-navigates to
-// the same page — harmless) so clicking any row from either of the two
-// remaining pages always works, per an earlier explicit request ("allow
-// the agent to click back to normal Agent Workspace 2.0").
+// `currentPage` decides whether this one row shows the "active" (blue,
+// non-clickable-looking) treatment — kept even with a single-page menu so
+// the row still gets a real `onClick` (re-navigating to the same page,
+// harmless) per an earlier explicit request ("allow the agent to click
+// back to normal Agent Workspace 2.0").
 export function buildAppMenuGroups(onNavigate: ((page: Page) => void) | undefined, currentPage: Page): AppMenuGroup[] {
   return [
     {
@@ -136,12 +122,7 @@ export function buildAppMenuGroups(onNavigate: ((page: Page) => void) | undefine
         {
           // Per `HIDE_BRANDING_FOR_TESTING`'s own doc comment (agent-next-
           // gen-shared-utils.ts).
-          label: HIDE_BRANDING_FOR_TESTING ? "Workspace | Phase 1" : "Agent Workspace 2.0 | Phase 1",
-          active: currentPage === "agent-advanced",
-          onClick: () => onNavigate?.("agent-advanced"),
-        },
-        {
-          label: HIDE_BRANDING_FOR_TESTING ? "Workspace | Phase 2" : "Agent Workspace 2.0 | Phase 2",
+          label: HIDE_BRANDING_FOR_TESTING ? "Workspace" : "Agent Workspace 2.0",
           active: currentPage === "agent-with-desk",
           onClick: () => onNavigate?.("agent-with-desk"),
         },

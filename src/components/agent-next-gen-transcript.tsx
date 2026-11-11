@@ -951,11 +951,28 @@ export function TranscriptSessionDetails({
  *  (channel-row.tsx) for its Consult/Transfer button, recreated locally here
  *  since that one's a private, unexported helper in that file — this app
  *  only needs the same LOOK, not a shared import. */
-export function TransferIcon() {
+/** `size="sm"` (default, unchanged) is the original 16px composite every
+ *  existing consumer still gets — small icon-button contexts
+ *  (`ActionIconButton size="sm"` rows, the per-participant roster button)
+ *  where every sibling icon is already `h-4 w-4`.
+ *  `size="md"` is a 20px variant added per a confirmed usertesting finding
+ *  (screenshot: the compact "within tile" voice call controls' Consult
+ *  icon) — testers hovered every OTHER control in that row to discover it
+ *  but skipped Consult, not registering it as part of the same action
+ *  cluster. Root cause: every sibling in that row (Hold/Mask/Record/
+ *  Keypad/Mute/etc., `CompactCallControlButton`/`WideCallControlButton`,
+ *  agent-next-gen-voice-call-controls.tsx) renders its icon at `h-5 w-5` —
+ *  this composite was the one icon in that row still hardcoded to the
+ *  smaller 16px size, with no way for a caller to ask for anything else.
+ *  Only that row's two call sites now pass `size="md"`; every other
+ *  consumer (unchanged default) is unaffected. */
+export function TransferIcon({ size = "sm" }: { size?: "sm" | "md" } = {}) {
+  const boxClass = size === "md" ? "h-5 w-5" : "h-4 w-4";
+  const badgeClass = size === "md" ? "absolute -right-1 -top-1 h-3 w-3" : "absolute -right-1 -top-1 h-2.5 w-2.5";
   return (
-    <span className="relative inline-flex h-4 w-4 items-center justify-center" aria-hidden="true">
-      <User className="h-4 w-4" strokeWidth={1.5} />
-      <ArrowUpRight className="absolute -right-1 -top-1 h-2.5 w-2.5" strokeWidth={2.5} />
+    <span className={cn("relative inline-flex items-center justify-center", boxClass)} aria-hidden="true">
+      <User className={boxClass} strokeWidth={1.5} />
+      <ArrowUpRight className={badgeClass} strokeWidth={2.5} />
     </span>
   );
 }

@@ -14,7 +14,7 @@ import {
 } from "@nicecxone/lyra-ui";
 import { HIDE_BRANDING_FOR_TESTING } from "@/components/agent-next-gen-shared-utils";
 
-type Page = "agent-workspace" | "agent-advanced" | "outbound" | "login";
+type Page = "agent-workspace" | "agent-with-desk" | "outbound" | "login";
 
 interface HeaderProps {
   onNavigate?: (page: Page) => void;
@@ -34,14 +34,15 @@ export function Header({ onNavigate, currentPage = "agent-workspace" }: HeaderPr
   const appMenuGroups: AppMenuGroup[] = [
     {
       items: [
-        // Per explicit request ("remove phase 1 for now ... completely
-        // delete the phase 1 files"): this used to open the old "agent"
-        // page (`AgentNextGenPage.tsx`), which is now deleted — repointed
-        // to `"agent-advanced"` (`AgentWorkspaceAdvancedPage.tsx`, now
-        // labeled "Agent Workspace 2.0 | Phase 1" in that page's own app
-        // menu, agent-next-gen-outbound-data.tsx's `buildAppMenuGroups`)
-        // so this row still goes somewhere real instead of a dead page id.
-        { label: "Agent Next Gen", onClick: () => navigate("agent-advanced") },
+        // Per explicit request ("remove Phase 1 ... remove the idea of
+        // Phases"): this used to open the old "agent" page
+        // (`AgentNextGenPage.tsx`), then later `"agent-advanced"`
+        // (`AgentWorkspaceAdvancedPage.tsx`) once that became deleted
+        // Phase 1's replacement — both are now gone, so this is repointed
+        // to `"agent-with-desk"` (`AgentWorkspace2WithDeskPage.tsx`, the
+        // one remaining Agent Workspace 2.0 page) so this row still goes
+        // somewhere real instead of a dead page id.
+        { label: "Agent Next Gen", onClick: () => navigate("agent-with-desk") },
         {
           label: HIDE_BRANDING_FOR_TESTING ? "Workspace Premium" : "Agent Workspace Premium",
           active: currentPage === "agent-workspace",

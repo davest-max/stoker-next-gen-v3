@@ -985,15 +985,16 @@ function buildCustomerContextOverviewInfo(
 }
 
 /** Which top-level page the app is currently showing. Per explicit request
- *  ("remove phase 1 for now ... completely delete the phase 1 files"): the
- *  plain `"agent"` page (the original `AgentNextGenPage.tsx`, "Phase 1")
- *  has been removed from this union — that file is deleted, and nothing
- *  should be able to construct that page id anymore. `"agent-advanced"`
- *  (`AgentWorkspaceAdvancedPage.tsx`) is now the page labeled "Agent
- *  Workspace 2.0 | Phase 1" in the app menu (was "Phase 1B" — see
- *  `buildAppMenuGroups`, agent-next-gen-outbound-data.tsx); `"agent-with-
- *  desk"` (`AgentWorkspace2WithDeskPage.tsx`) is "Phase 2", untouched. */
-type Page = "agent-workspace" | "agent-with-desk" | "agent-advanced" | "outbound" | "login";
+ *  ("remove Phase 1 from this project ... remove the idea of Phases"): the
+ *  plain `"agent"` page (the original `AgentNextGenPage.tsx`, an earlier
+ *  "Phase 1") and `"agent-advanced"` (`AgentWorkspaceAdvancedPage.tsx`, a
+ *  later "Phase 1") have both been removed from this union — both files
+ *  are deleted, and nothing should be able to construct either page id
+ *  anymore. `"agent-with-desk"` (`AgentWorkspace2WithDeskPage.tsx`) is the
+ *  one remaining Agent Workspace 2.0 page, labeled plain "Agent Workspace
+ *  2.0" in the app menu now that there's nothing left to distinguish it
+ *  from. */
+type Page = "agent-workspace" | "agent-with-desk" | "outbound" | "login";
 
 /** Per explicit request ("hide the assignments resolved chip in the home
  *  tab"): gates the green "{n} Assignments resolved today" `Badge` each of

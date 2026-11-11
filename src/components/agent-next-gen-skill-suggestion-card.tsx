@@ -1,4 +1,4 @@
-import { PhoneForwarded, Sparkles } from "lucide-react";
+import { ArrowRight, Sparkles } from "lucide-react";
 import { Button } from "@nicecxone/lyra-ui";
 import { TransferIcon } from "@/components/agent-next-gen-transcript";
 
@@ -67,7 +67,18 @@ export function SkillConsultTransferSuggestionCard({
           Consult with {skillLabel}
         </Button>
         <Button variant="outline" size="sm" onClick={onTransfer}>
-          <PhoneForwarded className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
+          {/* Per explicit request ("separate the consult icon from a
+              cold-transfer icon... lean on the same arrow from consult but
+              only the arrow"): a bare `ArrowRight` — the same hand-off
+              arrow `TransferIcon`'s own badge already uses for "Consult,"
+              minus the person — now stands for a direct, no-consult
+              transfer everywhere in the app (`ConferencePicker`'s per-row
+              icon, `ParticipantRow`'s roster icon, and this button), so
+              this swaps out from the unrelated `PhoneForwarded` it used to
+              be. Matches `TransferIcon`'s own default `h-4 w-4` size on
+              the sibling Consult button just above, and this button's own
+              existing stroke weight. */}
+          <ArrowRight className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
           Cold transfer to {skillLabel}
         </Button>
       </div>

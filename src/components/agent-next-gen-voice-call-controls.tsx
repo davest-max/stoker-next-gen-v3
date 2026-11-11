@@ -150,6 +150,7 @@ import {
   Users,
   Split,
   Merge,
+  ArrowRight,
 } from "lucide-react";
 import { formatElapsedTime, initialsFor, CURRENT_AGENT_NAME } from "@/components/agent-next-gen-shared-utils";
 import { TransferIcon } from "@/components/agent-next-gen-transcript";
@@ -894,7 +895,14 @@ function ConferencePicker({
                     title={`Transfer to ${person.name}`}
                     onClick={() => setConfirmingTransferId(person.id)}
                   >
-                    <TransferIcon />
+                    {/* Per explicit request ("separate the consult icon
+                        from a cold-transfer icon... the same arrow from
+                        consult but only the arrow"): a bare `ArrowRight`,
+                        not the person+arrow `TransferIcon` composite this
+                        used to share with the real "Consult" action above
+                        — same `h-4 w-4`/`strokeWidth={1.5}` as this row's
+                        own Phone/MessageSquare icons. */}
+                    <ArrowRight className="h-4 w-4" strokeWidth={1.5} />
                   </ActionIconButton>
                 )}
               </div>
@@ -1318,41 +1326,60 @@ function ParticipantRow({
       </span>
     ) : (
       <span className={cn("flex shrink-0 items-center gap-1.5", !stacked && "ml-auto")}>
+        {/* Per explicit request ("adjust the timing of the tooltip. let
+            appear faster like 500ms"): these three buttons used to rely on
+            the plain native `title` attribute for their hover label — the
+            browser's own OS-default tooltip delay (typically 1-1.5s,
+            nowhere near as fast as this bar's other controls, which all go
+            through the shared `Tooltip` component's much quicker,
+            consistently-timed show delay). Swapped to that same `Tooltip`,
+            each with an explicit `delayMs={500}` — faster than the native
+            delay these used to inherit, though still a bit slower than
+            this component's own global default (80ms, `tooltip.tsx`) since
+            these sit on a dense roster row where an instant tooltip on
+            every incidental mouse-pass would be noisier than useful. */}
         {onToggleHold && (
-          <button
-            type="button"
-            title={isOnHold ? `Resume ${label}` : `Hold ${label}`}
-            aria-label={isOnHold ? `Resume ${label}` : `Hold ${label}`}
-            onClick={onToggleHold}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-full hover:bg-lyra-state-hover",
-              isOnHold ? "text-lyra-status-critical-strong" : "text-lyra-fg-secondary"
-            )}
-          >
-            {isOnHold ? <Play className="h-4 w-4" strokeWidth={2} /> : <Pause className="h-4 w-4" strokeWidth={2} />}
-          </button>
+          <Tooltip content={isOnHold ? `Resume ${label}` : `Hold ${label}`} placement="top" delayMs={500}>
+            <button
+              type="button"
+              aria-label={isOnHold ? `Resume ${label}` : `Hold ${label}`}
+              onClick={onToggleHold}
+              className={cn(
+                "flex h-8 w-8 items-center justify-center rounded-full hover:bg-lyra-state-hover",
+                isOnHold ? "text-lyra-status-critical-strong" : "text-lyra-fg-secondary"
+              )}
+            >
+              {isOnHold ? <Play className="h-4 w-4" strokeWidth={2} /> : <Pause className="h-4 w-4" strokeWidth={2} />}
+            </button>
+          </Tooltip>
         )}
         {onTransfer && (
-          <button
-            type="button"
-            title={`Transfer call to ${label}`}
-            aria-label={`Transfer call to ${label}`}
-            onClick={() => setConfirmingAction("transfer")}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
-          >
-            <TransferIcon />
-          </button>
+          <Tooltip content={`Transfer call to ${label}`} placement="top" delayMs={500}>
+            <button
+              type="button"
+              aria-label={`Transfer call to ${label}`}
+              onClick={() => setConfirmingAction("transfer")}
+              className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-fg-secondary hover:bg-lyra-state-hover"
+            >
+              {/* Per explicit request — see the identical `ConferencePicker`
+                  row swap's own doc comment above. Matches this row's own
+                  Play/Pause/Check/X sibling icons' `h-4 w-4`/`strokeWidth={2}`,
+                  not the picker row's `1.5`. */}
+              <ArrowRight className="h-4 w-4" strokeWidth={2} />
+            </button>
+          </Tooltip>
         )}
         {onHangUp && (
-          <button
-            type="button"
-            title={`Drop ${label}`}
-            aria-label={`Drop ${label}`}
-            onClick={() => setConfirmingAction("drop")}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-status-critical-strong hover:bg-lyra-state-hover"
-          >
-            <PhoneOff className="h-4 w-4" strokeWidth={2} />
-          </button>
+          <Tooltip content={`Drop ${label}`} placement="top" delayMs={500}>
+            <button
+              type="button"
+              aria-label={`Drop ${label}`}
+              onClick={() => setConfirmingAction("drop")}
+              className="flex h-8 w-8 items-center justify-center rounded-full text-lyra-status-critical-strong hover:bg-lyra-state-hover"
+            >
+              <PhoneOff className="h-4 w-4" strokeWidth={2} />
+            </button>
+          </Tooltip>
         )}
       </span>
     )
@@ -3389,8 +3416,26 @@ export function VoiceCallControls({
               outright) rather than deleting the element — it still
               occupies the same `gap-1` slot either host's layout already
               accounts for, so removing just the color keeps every other
-              spacing/wrap measurement in this row unchanged. */}
-          <span aria-hidden="true" className="h-4 w-px shrink-0 self-center" />
+              spacing/wrap measurement in this row unchanged.
+
+              Per a later confirmed usertesting finding ("left-align the
+              Consult icon with the Hold icon above it — it seems out of
+              bounds"), omitted outright on the `trailingControlsPlain`
+              host, matching the right separator's own identical fix
+              (below): once that one was dropped, Consult's wrapped line
+              had no leading phantom item, while Hold's line still did —
+              under this row's own `justify-between` (this slot's own doc
+              comment, above), that one extra flex item at the START of
+              Hold's line shifts Hold's real left edge rightward by a full
+              distributed gap, while Consult (now the genuine first item on
+              its own line) sits flush at the row's true left edge instead.
+              Confirmed live: Hold's button measured 13.5px further right
+              than Consult's with this divider still present. Dropping it
+              here puts both rows' first real icon at the same left edge.
+              The bottom bar's own wide/labeled rendering (one single
+              un-wrapped row, not two independently-justified lines) is
+              unaffected. */}
+          {!trailingControlsPlain && <span aria-hidden="true" className="h-4 w-px shrink-0 self-center" />}
           {/* `mainHoldOn` — per a confirmed usability finding ("some agents
               clicking easily on the main hold icon to hold only
               themselves, others thought surely they were putting the
@@ -3742,7 +3787,13 @@ export function VoiceCallControls({
             {controlsCompact ? (
               <CompactCallControlButton
                 ref={consultButtonSelfRef}
-                icon={<TransferIcon />}
+                // `size="md"` — per a confirmed usertesting finding
+                // (screenshot: testers discovered every other icon in this
+                // row by hovering it but skipped Consult), matches this
+                // composite icon's size to every sibling's own `h-5 w-5`
+                // instead of its hardcoded-smaller default — see
+                // `TransferIcon`'s own doc comment.
+                icon={<TransferIcon size="md" />}
                 active={conferenceOpen}
                 aria-label="Consult"
                 title="Consult"
@@ -3765,7 +3816,8 @@ export function VoiceCallControls({
             ) : (
               <WideCallControlButton
                 ref={consultButtonSelfRef}
-                icon={<TransferIcon />}
+                // See the compact variant's own identical comment just above.
+                icon={<TransferIcon size="md" />}
                 label="Consult"
                 active={conferenceOpen}
                 aria-label="Consult"
@@ -3832,13 +3884,31 @@ export function VoiceCallControls({
               dropping just the color. See the LEFT separator's own doc
               comment (just above, same slot's opening boundary) for the
               identical reasoning applied there. */}
-          <span
-            aria-hidden="true"
-            className={cn(
-              "h-4 w-px shrink-0 self-center",
-              mergeTrailingIntoCluster && !trailingControlsPlain && "mx-2"
-            )}
-          />
+          {/* Per the same confirmed usertesting finding as `TransferIcon`'s
+              own `size="md"` call site above (testers didn't notice Consult
+              was part of this action row): on the `trailingControlsPlain`
+              host, this divider — already colorless/invisible on both
+              hosts, see the long comment above — sits exactly between
+              Consult and Mute once this pool wraps such that Consult lands
+              alone at the start of a line with Mute/Add video/End Call
+              (the common case at this host's narrow width). With this
+              row's own `justify-between` (this slot's own doc comment,
+              above), one extra flex item between two VISIBLE icons doesn't
+              just take up its own 1px — it inserts a whole extra
+              distributed gap, roughly doubling the visual space between
+              Consult and Mute compared to Mute-to-Add-video or Add-video-
+              to-End-Call. That's what read as "Consult isn't part of this
+              group" — not icon size alone. Omitted outright on this host;
+              the bottom bar's own wide/labeled rendering (where this line
+              sits between a true leading cluster and a true trailing
+              cluster on ONE un-wrapped row, not a phantom mid-line gap)
+              is unaffected. */}
+          {!trailingControlsPlain && (
+            <span
+              aria-hidden="true"
+              className={cn("h-4 w-px shrink-0 self-center", mergeTrailingIntoCluster && "mx-2")}
+            />
+          )}
           {/* `mergeTrailingIntoCluster` — see that prop's own doc comment —
               folds Mute/Add video/End Call into THIS SAME wrapping pool,
               right after Consult, instead of leaving them in their own

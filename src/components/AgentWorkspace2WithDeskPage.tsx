@@ -1607,26 +1607,6 @@ const TEST_SEED_PLAIN_CALL_1: Interaction = {
   ],
   currentThreadId: "voice",
 };
-const TEST_SEED_PLAIN_CALL_2: Interaction = {
-  id: "test-seed:priya-anand",
-  interactionId: generateInteractionId(),
-  customerName: "Priya Anand",
-  customerId: generateCaseId(),
-  threads: [
-    {
-      id: "voice",
-      type: "voice",
-      startTick: -610,
-      preview: OUTBOUND_CONFIG.skillOptions.find((s: { value: string }) => s.value === "billing")?.label,
-      value: "(312) 555-0199",
-      addressLabel: "(312) 555-0199",
-      contactId: generateContactId(),
-      direction: "outbound",
-      backgroundedSinceTick: -15,
-    },
-  ],
-  currentThreadId: "voice",
-};
 const TEST_SEED_CONFERENCE_CALL: Interaction = {
   id: "test-seed:jordan-reyes",
   interactionId: generateInteractionId(),
@@ -1696,7 +1676,6 @@ const TEST_SEED_SKILL_SUGGESTION_CALL: Interaction = {
 };
 const TEST_SEED_INTERACTIONS: Interaction[] = [
   TEST_SEED_PLAIN_CALL_1,
-  TEST_SEED_PLAIN_CALL_2,
   TEST_SEED_CONFERENCE_CALL,
   TEST_SEED_SKILL_SUGGESTION_CALL,
 ];
@@ -4713,8 +4692,30 @@ export function AgentWorkspace2WithDeskPage({
   // so there's nothing left here to show or dismiss on its own. Computed
   // fresh every render, same convention `renderedMergeGroupIds` above
   // already follows, and checked in the render loop right alongside it.
-  const foldedIntoConferenceIds = new Set(
+  // Per a confirmed bug report ("using the New Outbound button and flow
+  // [does not] result in a new assignment tile appearing"): a `colleagues`
+  // entry is just decorative roster metadata (a name + id shown in a
+  // conference's participant list) — the SAME real agent/skill id can
+  // perfectly well also be the id of a genuinely separate, still-live
+  // `Interaction` the agent independently started via New Outbound (e.g.
+  // calling that same agent directly, unrelated to the conference they
+  // happen to also be a colleague on). `handleJoinLiveCall` (above) is the
+  // only thing that's SUPPOSED to produce a "fold" — and it always marks
+  // the folded agent's own original interaction `voiceCallEnded: true` in
+  // the exact same update that adds it to the customer's `colleagues`
+  // list, so this set is now additionally intersected with that flag:
+  // an id only counts as "folded" (hidden from its own card) if THIS
+  // interaction was actually ended as part of a real join — not merely
+  // because some live conference's static/seeded `colleagues` list happens
+  // to share its id. Caught live: seeding `TEST_SEED_CONFERENCE_CALL`
+  // (Jordan Reyes) with a real agent in its own decorative `colleagues`
+  // list silently hid that SAME agent's brand-new, unrelated New Outbound
+  // call for as long as both were open at once.
+  const colleagueIds = new Set(
     interactions.flatMap((i) => findLiveVoiceThread(i)?.colleagues?.map((c) => c.id) ?? [])
+  );
+  const foldedIntoConferenceIds = new Set(
+    interactions.filter((i) => i.voiceCallEnded && colleagueIds.has(i.id)).map((i) => i.id)
   );
 
   const handleMergeCalls = (sourceId: string, targetId: string) => {
@@ -4952,34 +4953,78 @@ export function AgentWorkspace2WithDeskPage({
   // currently being VIEWED, so switching over to check on a different
   // customer's chat mid-call doesn't incorrectly clear "Working" the
   // instant the voice call scrolls out of view.
-  // `preCallStatusRef` remembers whatever status was active the moment the
-  // call started, so hanging up restores it (Available/Unavailable/a
-  // specific reason code) instead of always falling back to one hardcoded
-  // default — same "restore what was there before" pattern
-  // `connectAgentLegSignal`'s own effect (agent-profile.tsx) already uses
-  // for a comparable "external signal drives an internal transition"
-  // shape. Deliberately keyed only on `isOnVoiceCall` (not `agentStatus`
-  // too) — this is an edge-triggered effect reacting to the call actually
-  // starting/ending, not something that should re-fire just because
-  // `agentStatus` itself changed for some unrelated reason.
+  //
+  // Per a later explicit request ("set agent status to working when
+  // focused on any live assignment"), `isFocusedOnLiveAssignment` is a
+  // SECOND, independent trigger for the exact same "working" status — true
+  // whenever `activeInteraction` (whichever assignment is actually open in
+  // the main content area right now, any channel type, not just voice) is
+  // non-null and not yet `closed`. `shouldBeWorking` is just these two
+  // ORed together: either one alone is enough to force "working," so a
+  // live voice call elsewhere in the queue still holds "working" even
+  // while the agent is focused on a different (non-voice) assignment —
+  // exactly preserving `isOnVoiceCall`'s own "don't lose Working just
+  // because focus moved" guarantee above — AND focusing on any other live
+  // assignment (a chat, an SMS, an email, a WhatsApp thread) now ALSO
+  // forces "working" even with no voice call anywhere.
+  // `preWorkingStatusRef` remembers whatever status was active the moment
+  // EITHER condition first went true, so the moment BOTH go false again
+  // restores it (Available/Unavailable/a specific reason code) instead of
+  // always falling back to one hardcoded default — same "restore what was
+  // there before" pattern `connectAgentLegSignal`'s own effect (agent-
+  // profile.tsx) already uses for a comparable "external signal drives an
+  // internal transition" shape.
+  //
+  // Per a confirmed, later-discovered bug (found while verifying the focus
+  // rule above, then explicitly asked to be patched too): this effect used
+  // to be keyed ONLY on `shouldBeWorking`, not `agentStatus` — which left a
+  // real race at session start. The seeded data already has live voice
+  // calls at mount, so this effect fires once on the very first render and
+  // sets "working" — but the welcome modal's "Go Available"/"Start
+  // Unavailable" buttons (`handleStatusChange`) call `setAgentStatus`
+  // AFTER that, overwriting it straight back to "available"/"unavailable"
+  // with nothing left to correct it: `shouldBeWorking` never actually
+  // CHANGED value (it was already `true` before and after), so an effect
+  // keyed only on it has no reason to re-run and silently leaves the
+  // displayed status wrong for the rest of the session. The exact same gap
+  // applies any time `agentStatus` changes through any other path (the
+  // real status dropdown, not just this modal) while `shouldBeWorking` is
+  // already true.
+  //
+  // Fixed by adding `agentStatus` to the dependency list, so ANY change to
+  // it — not just a `shouldBeWorking` transition — re-runs this effect.
+  // This is safe, not a loop: the `if (shouldBeWorking)` branch is already
+  // idempotent (`if (agentStatus !== "working")` guards the actual
+  // `setAgentStatus("working")` call, so it's a no-op once already
+  // "working"), and the `else if` branch only ever fires when
+  // `shouldBeWorking` is false AND `agentStatus` is "working" — a state
+  // nothing but this effect itself can produce, so a manual status pick
+  // can never trigger it. The practical effect: an agent can still click
+  // "Available"/"Unavailable"/a reason code (or the welcome modal's
+  // buttons) at any time, even mid-call/while focused on a live
+  // assignment — rather than being blocked outright, that pick immediately
+  // re-captures into `preWorkingStatusRef` (so it's what gets restored the
+  // moment the call ends/focus moves away) while the VISIBLE status stays
+  // correctly pinned to "working" for as long as it should be.
   const isOnVoiceCall = interactions.some(
     (i) => !i.closed && !i.voiceCallEnded && i.threads.some((t) => t.type === "voice")
   );
-  const preCallStatusRef = useRef<AgentStatus | null>(null);
+  const isFocusedOnLiveAssignment = !!activeInteraction && !activeInteraction.closed;
+  const shouldBeWorking = isOnVoiceCall || isFocusedOnLiveAssignment;
+  const preWorkingStatusRef = useRef<AgentStatus | null>(null);
   useEffect(() => {
-    if (isOnVoiceCall) {
+    if (shouldBeWorking) {
       if (agentStatus !== "working") {
-        preCallStatusRef.current = agentStatus;
+        preWorkingStatusRef.current = agentStatus;
         setAgentStatus("working");
         setElapsedSeconds(0);
       }
     } else if (agentStatus === "working") {
-      setAgentStatus(preCallStatusRef.current ?? "unavailable");
-      preCallStatusRef.current = null;
+      setAgentStatus(preWorkingStatusRef.current ?? "unavailable");
+      preWorkingStatusRef.current = null;
       setElapsedSeconds(0);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnVoiceCall]);
+  }, [shouldBeWorking, agentStatus]);
 
   /* ── Launching interactions from CreateNew ──
      Overrides OUTBOUND_CONFIG's default onStartCall/onQuickDial (which just
@@ -8037,10 +8082,10 @@ export function AgentWorkspace2WithDeskPage({
                 HIDE_BRANDING_FOR_TESTING ? (
                   <div className="h-6 w-6 shrink-0" aria-hidden="true" />
                 ) : (
-                  <img src={appIcon} alt="Agent Workspace 2.0 | Phase 2" className="h-6 w-6" />
+                  <img src={appIcon} alt="Agent Workspace 2.0" className="h-6 w-6" />
                 )
               }
-              name={HIDE_BRANDING_FOR_TESTING ? "Workspace | Phase 2" : "Agent Workspace 2.0 | Phase 2"}
+              name={HIDE_BRANDING_FOR_TESTING ? "Workspace" : "Agent Workspace 2.0"}
               compact={isCompactHeader}
               groups={appMenuGroups}
               menuFooter={HIDE_BRANDING_FOR_TESTING ? undefined : <CXoneLogo />}
